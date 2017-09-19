@@ -25,8 +25,8 @@ import (
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	serviceapi "k8s.io/kubernetes/pkg/api/v1/service"
 
-	"github.com/Azure/azure-sdk-for-go/arm/compute"
-	"github.com/Azure/azure-sdk-for-go/arm/network"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/compute"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/network"
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/types"

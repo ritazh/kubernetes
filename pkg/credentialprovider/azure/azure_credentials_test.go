@@ -20,7 +20,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/Azure/azure-sdk-for-go/arm/containerregistry"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/containerregistry"
 	"github.com/Azure/go-autorest/autorest/to"
 )
 
