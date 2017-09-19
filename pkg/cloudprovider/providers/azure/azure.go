@@ -29,7 +29,7 @@ import (
 	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/version"
 
-	"github.com/Azure/azure-sdk-for-go/profile/latest/compute"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
 	"github.com/Azure/azure-sdk-for-go/profile/latest/disk"
 	"github.com/Azure/azure-sdk-for-go/profile/latest/network"
 	"github.com/Azure/azure-sdk-for-go/profile/latest/storage"

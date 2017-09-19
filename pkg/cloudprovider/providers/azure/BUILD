@@ -31,7 +31,7 @@ go_library(
         "//pkg/controller:go_default_library",
         "//pkg/version:go_default_library",
         "//pkg/volume:go_default_library",
-        "//vendor/github.com/Azure/azure-sdk-for-go/profile/latest/compute:go_default_library",
+        "//vendor/github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute:go_default_library",
         "//vendor/github.com/Azure/azure-sdk-for-go/profile/latest/disk:go_default_library",
         "//vendor/github.com/Azure/azure-sdk-for-go/profile/latest/network:go_default_library",
         "//vendor/github.com/Azure/azure-sdk-for-go/profile/latest/storage:go_default_library",

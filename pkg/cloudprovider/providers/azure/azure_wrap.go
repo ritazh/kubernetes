@@ -19,7 +19,7 @@ package azure
 import (
 	"net/http"
 
-	"github.com/Azure/azure-sdk-for-go/profile/latest/compute"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
 	"github.com/Azure/azure-sdk-for-go/profile/latest/network"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/golang/glog"

@@ -17,7 +17,7 @@ limitations under the License.
 package azure_dd
 
 import (
-	"github.com/Azure/azure-sdk-for-go/profile/latest/compute"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
 	storage "github.com/Azure/azure-sdk-for-go/profile/latest/storage"
 	"github.com/golang/glog"
 	"k8s.io/api/core/v1"
