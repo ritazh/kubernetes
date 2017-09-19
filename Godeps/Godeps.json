@@ -28,34 +28,34 @@
 			"Rev": "3b1ae45394a234c385be014e9a488f2bb6eef821"
 		},
 		{
-			"ImportPath": "github.com/Azure/azure-sdk-for-go/profile/latest/compute",
+			"ImportPath": "github.com/ritazh/azure-sdk-for-go/profile/latest/compute",
 			"Comment": "v10.0.4-beta-1-g786cc84",
-			"Rev": "786cc84138518bf7fd6d60e92fad1ac9d1a117ad"
+			"Rev": "4edf3d7eae5055cdef67a0c20ea354fdfc9d0734"
 		},
 		{
-			"ImportPath": "github.com/Azure/azure-sdk-for-go/profile/latest/containerregistry",
+			"ImportPath": "github.com/ritazh/azure-sdk-for-go/profile/latest/containerregistry",
 			"Comment": "v10.0.4-beta-1-g786cc84",
-			"Rev": "786cc84138518bf7fd6d60e92fad1ac9d1a117ad"
+			"Rev": "4edf3d7eae5055cdef67a0c20ea354fdfc9d0734"
 		},
 		{
-			"ImportPath": "github.com/Azure/azure-sdk-for-go/profile/latest/disk",
+			"ImportPath": "github.com/ritazh/azure-sdk-for-go/profile/latest/disk",
 			"Comment": "v10.0.4-beta-1-g786cc84",
-			"Rev": "786cc84138518bf7fd6d60e92fad1ac9d1a117ad"
+			"Rev": "4edf3d7eae5055cdef67a0c20ea354fdfc9d0734"
 		},
 		{
-			"ImportPath": "github.com/Azure/azure-sdk-for-go/profile/latest/network",
+			"ImportPath": "github.com/ritazh/azure-sdk-for-go/profile/latest/network",
 			"Comment": "v10.0.4-beta-1-g786cc84",
-			"Rev": "786cc84138518bf7fd6d60e92fad1ac9d1a117ad"
+			"Rev": "4edf3d7eae5055cdef67a0c20ea354fdfc9d0734"
 		},
 		{
-			"ImportPath": "github.com/Azure/azure-sdk-for-go/profile/latest/storage",
+			"ImportPath": "github.com/ritazh/azure-sdk-for-go/profile/latest/storage",
 			"Comment": "v10.0.4-beta-1-g786cc84",
-			"Rev": "786cc84138518bf7fd6d60e92fad1ac9d1a117ad"
+			"Rev": "4edf3d7eae5055cdef67a0c20ea354fdfc9d0734"
 		},
 		{
-			"ImportPath": "github.com/Azure/azure-sdk-for-go/storage",
+			"ImportPath": "github.com/ritazh/azure-sdk-for-go/storage",
 			"Comment": "v10.0.4-beta-1-g786cc84",
-			"Rev": "786cc84138518bf7fd6d60e92fad1ac9d1a117ad"
+			"Rev": "4edf3d7eae5055cdef67a0c20ea354fdfc9d0734"
 		},
 		{
 			"ImportPath": "github.com/Azure/go-ansiterm",
