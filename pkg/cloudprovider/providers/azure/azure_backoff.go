@@ -19,7 +19,7 @@ package azure
 import (
 	"k8s.io/apimachinery/pkg/util/wait"
 
-	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/management/compute"
 	"github.com/Azure/azure-sdk-for-go/profile/latest/network"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/golang/glog"
