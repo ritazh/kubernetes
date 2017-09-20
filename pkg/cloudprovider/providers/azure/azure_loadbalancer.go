@@ -26,7 +26,7 @@ import (
 	serviceapi "k8s.io/kubernetes/pkg/api/v1/service"
 
 	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
-	"github.com/Azure/azure-sdk-for-go/profile/latest/network"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/network/network"
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/types"

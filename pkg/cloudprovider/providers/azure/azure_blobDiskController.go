@@ -31,7 +31,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	storage "github.com/Azure/azure-sdk-for-go/profile/latest/storage"
+	storage "github.com/Azure/azure-sdk-for-go/profile/latest/storage/storage"
 	azstorage "github.com/Azure/azure-sdk-for-go/storage"
 	"github.com/Azure/go-autorest/autorest/to"
 	"github.com/golang/glog"

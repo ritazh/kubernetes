@@ -30,9 +30,9 @@ import (
 	"k8s.io/kubernetes/pkg/version"
 
 	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
-	"github.com/Azure/azure-sdk-for-go/profile/latest/disk"
-	"github.com/Azure/azure-sdk-for-go/profile/latest/network"
-	"github.com/Azure/azure-sdk-for-go/profile/latest/storage"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/disk/disk"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/network/network"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/storage/storage"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
 	"github.com/Azure/go-autorest/autorest/azure"

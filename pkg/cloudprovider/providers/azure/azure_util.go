@@ -28,7 +28,7 @@ import (
 	"k8s.io/kubernetes/pkg/cloudprovider"
 
 	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
-	"github.com/Azure/azure-sdk-for-go/profile/latest/network"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/network/network"
 	"github.com/golang/glog"
 	"k8s.io/apimachinery/pkg/types"
 )

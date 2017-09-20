@@ -23,7 +23,7 @@ import (
 	"path"
 	libstrings "strings"
 
-	storage "github.com/Azure/azure-sdk-for-go/profile/latest/storage"
+	storage "github.com/Azure/azure-sdk-for-go/profile/latest/storage/storage"
 	"k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/sets"
