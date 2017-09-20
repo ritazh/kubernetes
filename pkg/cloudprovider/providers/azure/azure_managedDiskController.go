@@ -20,8 +20,8 @@ import (
 	"path"
 	"strings"
 
-	"github.com/Azure/azure-sdk-for-go/profile/latest/disk/disk"
-	storage "github.com/Azure/azure-sdk-for-go/profile/latest/storage/storage"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/management/disk"
+	storage "github.com/Azure/azure-sdk-for-go/profile/latest/storage/management/storage"
 	"github.com/golang/glog"
 	kwait "k8s.io/apimachinery/pkg/util/wait"
 )

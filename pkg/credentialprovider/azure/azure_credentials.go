@@ -21,7 +21,7 @@ import (
 	"os"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/profile/latest/containerregistry/containerregistry"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/containerregistry/management/containerregistry"
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/adal"
 	azureapi "github.com/Azure/go-autorest/autorest/azure"
