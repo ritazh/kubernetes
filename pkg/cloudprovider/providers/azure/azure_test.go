@@ -29,7 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	serviceapi "k8s.io/kubernetes/pkg/api/v1/service"
 
-	"github.com/Azure/azure-sdk-for-go/profile/latest/network/management/network"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/network/network"
 	"github.com/Azure/go-autorest/autorest/to"
 )
 

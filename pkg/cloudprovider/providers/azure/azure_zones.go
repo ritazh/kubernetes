@@ -27,7 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/pkg/cloudprovider"
 
-	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/management/compute"
+	"github.com/Azure/azure-sdk-for-go/profile/latest/compute/compute"
 )
 
 const instanceInfoURL = "http://169.254.169.254/metadata/v1/InstanceInfo"
