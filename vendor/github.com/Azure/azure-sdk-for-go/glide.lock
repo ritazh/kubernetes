@@ -1,0 +1,80 @@
+hash: 7a8f8652a17526f090124ace3974ce9bff3d6d09a83ab94841d377c1125111f7
+updated: 2017-09-21T10:03:16.072252774-07:00
+imports:
+- name: github.com/Azure/go-autorest
+  version: f6e08fe5e4d45c9a66e40196d3fed5f37331d224
+  subpackages:
+  - autorest
+  - autorest/adal
+  - autorest/azure
+  - autorest/date
+  - autorest/to
+  - autorest/validation
+- name: github.com/dgrijalva/jwt-go
+  version: d2709f9f1f31ebcda9651b03077758c1f3a0018c
+- name: github.com/howeyc/gopass
+  version: 3ca23474a7c7203e0a0a070fd33508f6efdb9b3d
+- name: github.com/marstr/collection
+  version: b500cc5ead2f54bc213f11de40f8e1f748d986dc
+- name: github.com/marstr/goalias
+  version: 3026ca7e18e829805b990b41e4ce28c92cb80caa
+  subpackages:
+  - model
+- name: github.com/marstr/randname
+  version: 6dd4fdb5aa401961bd04bb5d84c692ab874bd68c
+- name: github.com/marstr/swagger
+  version: f5db4ed2802c335b4fb1b5c60d2da5ea62ba8055
+- name: github.com/Masterminds/semver
+  version: 59c29afe1a994eacb71c833025ca7acf874bb1da
+- name: github.com/mattn/go-colorable
+  version: 5411d3eea5978e6cdc258b30de592b60df6aba96
+- name: github.com/mattn/go-isatty
+  version: 57fdcb988a5c543893cc61bce354a6e24ab70022
+- name: github.com/mgutz/ansi
+  version: 9520e82c474b0a04dd04f8a40959027271bab992
+- name: github.com/mgutz/minimist
+  version: 39eb8cf573ca29344bd7d7e6ba4d7febdebd37a9
+- name: github.com/mgutz/str
+  version: 968bf66e3da857419e4f6e71b2d5c9ae95682dc4
+- name: github.com/mgutz/to
+  version: 00c06406c2dd2e011f153a6502a21473676db33f
+- name: github.com/MichaelTJones/walk
+  version: 4748e29d5718c2df4028a6543edf86fd8cc0f881
+- name: github.com/nozzle/throttler
+  version: d9b45f19996c645d38c9266d1f5cf1990e930119
+- name: github.com/satori/uuid
+  version: 5bf94b69c6b68ee1b541973bb8e1144db23a194b
+- name: github.com/shopspring/decimal
+  version: b9ab2bce742bffa417d3c01158f6062d5e05ecb4
+- name: github.com/xtophs/azure-sdk-for-go
+  version: 76fc90689773168d2b6b8ad02e42ab60fb1359b7
+  subpackages:
+  - arm/dns
+  - arm/examples/helpers
+- name: golang.org/x/crypto
+  version: d172538b2cfce0c13cee31e647d0367aa8cd2486
+  subpackages:
+  - pkcs12
+  - pkcs12/internal/rc2
+  - ssh/terminal
+- name: golang.org/x/sys
+  version: 8f0908ab3b2457e2e15403d3697c9ef5cb4b57a9
+  subpackages:
+  - unix
+- name: gopkg.in/check.v1
+  version: 64131543e7896d5bcc6bd5a76287eb75ea96c673
+- name: gopkg.in/godo.v2
+  version: b5fd2f0bef1ebe832e628cfad18ab1cc707f65a1
+  subpackages:
+  - glob
+  - util
+  - watcher
+  - watcher/fswatch
+testImports:
+- name: github.com/dnaeon/go-vcr
+  version: 87d4990451a858cc210399285be976e63bc3c364
+  subpackages:
+  - cassette
+  - recorder
+- name: gopkg.in/yaml.v2
+  version: 53feefa2559fb8dfa8d81baad31be332c97d6c77

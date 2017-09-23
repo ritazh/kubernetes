@@ -164,12 +164,12 @@ func GetServicePrincipalToken(config *Config, env *azure.Environment) (*adal.Ser
 		return nil, fmt.Errorf("creating the OAuth config: %v", err)
 	}
 
-	if config.UseManagedIdentityExtension {
-		glog.V(2).Infoln("azure: using managed identity extension to retrieve access token")
-		return adal.NewServicePrincipalTokenFromMSI(
-			*oauthConfig,
-			env.ServiceManagementEndpoint)
-	}
+	//if config.UseManagedIdentityExtension {
+	//	glog.V(2).Infoln("azure: using managed identity extension to retrieve access token")
+	//	return adal.NewServicePrincipalTokenFromMSI(
+	//		*oauthConfig,
+	//		env.ServiceManagementEndpoint)
+	//}
 
 	if len(config.AADClientSecret) > 0 {
 		glog.V(2).Infoln("azure: using client_id+client_secret to retrieve access token")

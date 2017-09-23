@@ -1,0 +1,7 @@
+../../service/compute/management/2016-03-30/compute
+../../service/network/management/2015-06-15/applicationGateway
+../../service/network/management/2015-05-01-preview/network
+../../service/keyvault/management/2015-06-01/keyvault
+../../service/web/management/2015-08-01/service
+../../service/web/management/2015-08-01/appServiceCertificateOrders
+../../service/compute/management/2015-06-15/compute

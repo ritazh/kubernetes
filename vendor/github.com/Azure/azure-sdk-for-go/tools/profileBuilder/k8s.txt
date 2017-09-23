@@ -1,0 +1,5 @@
+../../service/compute/management/2016-04-30-preview/compute
+../../service/network/management/2016-03-30/network
+../../service/containerregistry/management/2017-03-01/containerregistry
+../../service/compute/management/2016-04-30-preview/disk
+../../service/storage/management/2016-12-01/storage
