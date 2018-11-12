@@ -231,14 +231,12 @@ func (az *Cloud) getLoadBalancerRuleName(service *v1.Service, port v1.ServicePor
 	return fmt.Sprintf("%s-%s-%s-%d", prefix, *subnetName, port.Protocol, port.Port)
 }
 
-func (az *Cloud) getSecurityRuleName(service *v1.Service, port v1.ServicePort, sourceAddrPrefix string) string {
+func (az *Cloud) getSecurityRuleName(service *v1.Service, port v1.ServicePort) string {
 	if useSharedSecurityRule(service) {
-		safePrefix := strings.Replace(sourceAddrPrefix, "/", "_", -1)
-		return fmt.Sprintf("shared-%s-%d-%s", port.Protocol, port.Port, safePrefix)
+		return fmt.Sprintf("shared-%s-%d", port.Protocol, port.Port)
 	}
-	safePrefix := strings.Replace(sourceAddrPrefix, "/", "_", -1)
 	rulePrefix := az.getRulePrefix(service)
-	return fmt.Sprintf("%s-%s-%d-%s", rulePrefix, port.Protocol, port.Port, safePrefix)
+	return fmt.Sprintf("%s-%s-%d", rulePrefix, port.Protocol, port.Port)
 }
 
 // This returns a human-readable version of the Service used to tag some resources.

@@ -1007,28 +1007,26 @@ func (az *Cloud) reconcileSecurityGroup(clusterName string, service *v1.Service,
 	expectedSecurityRules := []network.SecurityRule{}
 
 	if wantLb {
-		expectedSecurityRules = make([]network.SecurityRule, len(ports)*len(sourceAddressPrefixes))
+		expectedSecurityRules = make([]network.SecurityRule, len(ports))
 
 		for i, port := range ports {
 			_, securityProto, _, err := getProtocolsFromKubernetesProtocol(port.Protocol)
 			if err != nil {
 				return nil, err
 			}
-			for j := range sourceAddressPrefixes {
-				ix := i*len(sourceAddressPrefixes) + j
-				securityRuleName := az.getSecurityRuleName(service, port, sourceAddressPrefixes[j])
-				expectedSecurityRules[ix] = network.SecurityRule{
-					Name: to.StringPtr(securityRuleName),
-					SecurityRulePropertiesFormat: &network.SecurityRulePropertiesFormat{
-						Protocol:                 *securityProto,
-						SourcePortRange:          to.StringPtr("*"),
-						DestinationPortRange:     to.StringPtr(strconv.Itoa(int(port.Port))),
-						SourceAddressPrefix:      to.StringPtr(sourceAddressPrefixes[j]),
-						DestinationAddressPrefix: to.StringPtr(destinationIPAddress),
-						Access:                   network.SecurityRuleAccessAllow,
-						Direction:                network.SecurityRuleDirectionInbound,
-					},
-				}
+			securityRuleName := az.getSecurityRuleName(service, port)
+			sourceAddressPrefixesString := strings.Join(sourceAddressPrefixes, ",")
+			expectedSecurityRules[i] = network.SecurityRule{
+				Name: to.StringPtr(securityRuleName),
+				SecurityRulePropertiesFormat: &network.SecurityRulePropertiesFormat{
+					Protocol:                 *securityProto,
+					SourcePortRange:          to.StringPtr("*"),
+					DestinationPortRange:     to.StringPtr(strconv.Itoa(int(port.Port))),
+					SourceAddressPrefix:      to.StringPtr(sourceAddressPrefixesString),
+					DestinationAddressPrefix: to.StringPtr(destinationIPAddress),
+					Access:                   network.SecurityRuleAccessAllow,
+					Direction:                network.SecurityRuleDirectionInbound,
+				},
 			}
 		}
 	}
@@ -1071,7 +1069,7 @@ func (az *Cloud) reconcileSecurityGroup(clusterName string, service *v1.Service,
 	if useSharedSecurityRule(service) && !wantLb {
 		for _, port := range ports {
 			for _, sourceAddressPrefix := range sourceAddressPrefixes {
-				sharedRuleName := az.getSecurityRuleName(service, port, sourceAddressPrefix)
+				sharedRuleName := az.getSecurityRuleName(service, port)
 				sharedIndex, sharedRule, sharedRuleFound := findSecurityRuleByName(updatedRules, sharedRuleName)
 				if !sharedRuleFound {
 					glog.V(4).Infof("Expected to find shared rule %s for service %s being deleted, but did not", sharedRuleName, service.Name)

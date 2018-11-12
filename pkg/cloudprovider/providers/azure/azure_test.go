@@ -1162,16 +1162,15 @@ func getTestSecurityGroup(az *Cloud, services ...v1.Service) *network.SecurityGr
 	for _, service := range services {
 		for _, port := range service.Spec.Ports {
 			sources := getServiceSourceRanges(&service)
-			for _, src := range sources {
-				ruleName := az.getSecurityRuleName(&service, port, src)
-				rules = append(rules, network.SecurityRule{
-					Name: to.StringPtr(ruleName),
-					SecurityRulePropertiesFormat: &network.SecurityRulePropertiesFormat{
-						SourceAddressPrefix:  to.StringPtr(src),
-						DestinationPortRange: to.StringPtr(fmt.Sprintf("%d", port.Port)),
-					},
-				})
-			}
+			sourceAddressPrefixesString := strings.Join(sources, ',')
+			ruleName := az.getSecurityRuleName(&service, port)
+			rules = append(rules, network.SecurityRule{
+				Name: to.StringPtr(ruleName),
+				SecurityRulePropertiesFormat: &network.SecurityRulePropertiesFormat{
+					SourceAddressPrefix:  to.StringPtr(sourceAddressPrefixesString),
+					DestinationPortRange: to.StringPtr(fmt.Sprintf("%d", port.Port)),
+				},
+			})
 		}
 	}
 
@@ -1407,7 +1406,7 @@ func validateSecurityGroup(t *testing.T, securityGroup *network.SecurityGroup, s
 		for _, wantedRule := range svc.Spec.Ports {
 			sources := getServiceSourceRanges(&svc)
 			for _, source := range sources {
-				wantedRuleName := az.getSecurityRuleName(&svc, wantedRule, source)
+				wantedRuleName := az.getSecurityRuleName(&svc, wantedRule)
 				seenRules[wantedRuleName] = wantedRuleName
 				foundRule := false
 				for _, actualRule := range *securityGroup.SecurityRules {
@@ -2481,10 +2480,10 @@ func TestCanCombineSharedAndPrivateRulesInSameGroup(t *testing.T) {
 	svc5.Spec.LoadBalancerIP = "192.168.22.33"
 	svc5.Annotations[ServiceAnnotationSharedSecurityRule] = "false"
 
-	expectedRuleName13 := "shared-TCP-4444-Internet"
-	expectedRuleName2 := "shared-TCP-8888-Internet"
-	expectedRuleName4 := az.getSecurityRuleName(&svc4, v1.ServicePort{Port: 4444, Protocol: v1.ProtocolTCP}, "Internet")
-	expectedRuleName5 := az.getSecurityRuleName(&svc5, v1.ServicePort{Port: 8888, Protocol: v1.ProtocolTCP}, "Internet")
+	expectedRuleName13 := "shared-TCP-4444"
+	expectedRuleName2 := "shared-TCP-8888"
+	expectedRuleName4 := az.getSecurityRuleName(&svc4, v1.ServicePort{Port: 4444, Protocol: v1.ProtocolTCP})
+	expectedRuleName5 := az.getSecurityRuleName(&svc5, v1.ServicePort{Port: 8888, Protocol: v1.ProtocolTCP})
 
 	sg := getTestSecurityGroup(az)
 
