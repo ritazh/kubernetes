@@ -27,7 +27,7 @@ import (
 
 // createCloudProvider helps consolidate what is needed for cloud providers, we explicitly list the things
 // that the cloud providers need as parameters, so we can control
-func createCloudProvider(cloudProvider string, externalCloudVolumePlugin string, cloudConfigFile string,
+func createCloudProvider(clientBuilder cloudprovider.ControllerClientBuilder, cloudProvider string, externalCloudVolumePlugin string, cloudConfigFile string,
 	allowUntaggedCloud bool, sharedInformers informers.SharedInformerFactory) (cloudprovider.Interface, ControllerLoopMode, error) {
 	var cloud cloudprovider.Interface
 	var loopMode ControllerLoopMode
@@ -39,10 +39,10 @@ func createCloudProvider(cloudProvider string, externalCloudVolumePlugin string,
 			// So we just tell the caller that we need to run ExternalLoops without any cloud provider.
 			return nil, loopMode, nil
 		}
-		cloud, err = cloudprovider.InitCloudProvider(externalCloudVolumePlugin, cloudConfigFile)
+		cloud, err = cloudprovider.InitCloudProvider(clientBuilder, externalCloudVolumePlugin, cloudConfigFile)
 	} else {
 		loopMode = IncludeCloudLoops
-		cloud, err = cloudprovider.InitCloudProvider(cloudProvider, cloudConfigFile)
+		cloud, err = cloudprovider.InitCloudProvider(clientBuilder, cloudProvider, cloudConfigFile)
 	}
 	if err != nil {
 		return nil, loopMode, fmt.Errorf("cloud provider could not be initialized: %v", err)
