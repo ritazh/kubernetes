@@ -20,13 +20,17 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
 
 	"k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/fields"
+	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/wait"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -38,6 +42,7 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/azure/auth"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/azure"
@@ -68,6 +73,22 @@ const (
 
 	externalResourceGroupLabel = "kubernetes.azure.com/resource-group"
 	managedByAzureLabel        = "kubernetes.azure.com/managed"
+
+	// UIDConfigMapName is the Key used to persist UIDs to configmaps.
+	UIDConfigMapName = "cloud-config"
+
+	// UIDNamespace is the namespace which contains the above config map
+	UIDNamespace = metav1.NamespaceSystem
+
+	// UIDConfig is the data keys for looking up the clusters UID
+	UIDConfig = "config"
+
+	// UIDLengthBytes is the length of a UID
+	UIDLengthBytes = 8
+
+	// Frequency of the updateFunc event handler being called
+	// This does not actually query the apiserver for current state - the local cache value is used.
+	updateFuncFrequency = 10 * time.Minute
 )
 
 var (
@@ -219,8 +240,9 @@ func init() {
 }
 
 // NewCloud returns a Cloud with initialized clients
-func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
-	config, err := parseConfig(configReader)
+func NewCloud(configReader io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+	klog.Infof("Azure cloud provider NewCloud...")
+	config, err := parseConfig(configReader, clientBuilder)
 	if err != nil {
 		return nil, err
 	}
@@ -405,27 +427,55 @@ func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 }
 
 // parseConfig returns a parsed configuration for an Azure cloudprovider config file
-func parseConfig(configReader io.Reader) (*Config, error) {
+func parseConfig(configReader io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (*Config, error) {
 	var config Config
+	var configContents []byte
+	var err error
 
 	if configReader == nil {
+		klog.Infof("Azure cloud provider configReader is nil. Using configmap...")
+		client := clientBuilder.ClientOrDie("azure-cloud-provider")
+		if client == nil {
+			return nil, fmt.Errorf("client from clientBuilder is nil")
+		}
+
+		configMaps, err := client.CoreV1().ConfigMaps(UIDNamespace).List(metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		for _, cm := range configMaps.Items {
+			klog.Infof("RITA configmap=%v", cm.GetName())
+			if cm.GetName() == UIDConfigMapName {
+				if clusterCloudConfig, exists := cm.Data[UIDConfig]; exists {
+					configContents = []byte(clusterCloudConfig)
+				} else {
+					return nil, fmt.Errorf("Expected %s does not exist in configmap", UIDConfig)
+				}
+				break
+			}
+		}
+	} else {
+		klog.Infof("Azure cloud provider configReader is provided")
+		configContents, err = ioutil.ReadAll(configReader)
+		if err != nil {
+			return nil, err
+		}
+	}
+	if len(configContents) > 0 {
+		err = yaml.Unmarshal(configContents, &config)
+		if err != nil {
+			return nil, err
+		}
+
 		return &config, nil
 	}
-
-	configContents, err := ioutil.ReadAll(configReader)
-	if err != nil {
-		return nil, err
-	}
-	err = yaml.Unmarshal(configContents, &config)
-	if err != nil {
-		return nil, err
-	}
-
-	return &config, nil
+	
+	return nil, fmt.Errorf("configContents size is incorrect")
 }
 
 // Initialize passes a Kubernetes clientBuilder interface to the cloud provider
 func (az *Cloud) Initialize(clientBuilder cloudprovider.ControllerClientBuilder, stop <-chan struct{}) {
+	klog.Infof("Azure cloud provider Initialize...")
 	az.kubeClient = clientBuilder.ClientOrDie("azure-cloud-provider")
 	az.eventBroadcaster = record.NewBroadcaster()
 	az.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: az.kubeClient.CoreV1().Events("")})
