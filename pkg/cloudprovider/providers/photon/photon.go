@@ -136,7 +136,7 @@ func readConfig(config io.Reader) (PCConfig, error) {
 }
 
 func init() {
-	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader) (cloudprovider.Interface, error) {
+	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
 		cfg, err := readConfig(config)
 		if err != nil {
 			klog.Errorf("Photon Cloud Provider: failed to read in cloud provider config file. Error[%v]", err)

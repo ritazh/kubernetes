@@ -1060,7 +1060,7 @@ func (s *awsSdkEC2) DescribeVpcs(request *ec2.DescribeVpcsInput) (*ec2.DescribeV
 
 func init() {
 	registerMetrics()
-	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader) (cloudprovider.Interface, error) {
+	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
 		cfg, err := readAWSCloudConfig(config)
 		if err != nil {
 			return nil, fmt.Errorf("unable to read AWS cloud provider config file: %v", err)
