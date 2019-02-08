@@ -224,7 +224,7 @@ func (l *persistentVolumeLabel) getAWSPVLabeler() (cloudprovider.PVLabeler, erro
 			cloudConfigReader = bytes.NewReader(l.cloudConfig)
 		}
 
-		cloudProvider, err := cloudprovider.GetCloudProvider("aws", cloudConfigReader)
+		cloudProvider, err := cloudprovider.GetCloudProvider(nil, "aws", cloudConfigReader)
 		if err != nil || cloudProvider == nil {
 			return nil, err
 		}
@@ -272,7 +272,7 @@ func (l *persistentVolumeLabel) getGCEPVLabeler() (cloudprovider.PVLabeler, erro
 			cloudConfigReader = bytes.NewReader(l.cloudConfig)
 		}
 
-		cloudProvider, err := cloudprovider.GetCloudProvider("gce", cloudConfigReader)
+		cloudProvider, err := cloudprovider.GetCloudProvider(nil, "gce", cloudConfigReader)
 		if err != nil || cloudProvider == nil {
 			return nil, err
 		}
@@ -299,7 +299,7 @@ func (l *persistentVolumeLabel) getAzurePVLabeler() (cloudprovider.PVLabeler, er
 			cloudConfigReader = bytes.NewReader(l.cloudConfig)
 		}
 
-		cloudProvider, err := cloudprovider.GetCloudProvider("azure", cloudConfigReader)
+		cloudProvider, err := cloudprovider.GetCloudProvider(nil, "azure", cloudConfigReader)
 		if err != nil || cloudProvider == nil {
 			return nil, err
 		}
@@ -346,7 +346,7 @@ func (l *persistentVolumeLabel) getOpenStackPVLabeler() (cloudprovider.PVLabeler
 			cloudConfigReader = bytes.NewReader(l.cloudConfig)
 		}
 
-		cloudProvider, err := cloudprovider.GetCloudProvider("openstack", cloudConfigReader)
+		cloudProvider, err := cloudprovider.GetCloudProvider(nil, "openstack", cloudConfigReader)
 		if err != nil || cloudProvider == nil {
 			return nil, err
 		}

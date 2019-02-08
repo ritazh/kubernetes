@@ -27,14 +27,14 @@ import (
 func TestOVirtCloudConfiguration(t *testing.T) {
 	config1 := (io.Reader)(nil)
 
-	_, err1 := cloudprovider.GetCloudProvider("ovirt", config1)
+	_, err1 := cloudprovider.GetCloudProvider(nil, "ovirt", config1)
 	if err1 == nil {
 		t.Fatalf("An error is expected when the configuration is missing")
 	}
 
 	config2 := strings.NewReader("")
 
-	_, err2 := cloudprovider.GetCloudProvider("ovirt", config2)
+	_, err2 := cloudprovider.GetCloudProvider(nil, "ovirt", config2)
 	if err2 == nil {
 		t.Fatalf("An error is expected when the configuration is empty")
 	}
@@ -43,7 +43,7 @@ func TestOVirtCloudConfiguration(t *testing.T) {
 [connection]
 	`)
 
-	_, err3 := cloudprovider.GetCloudProvider("ovirt", config3)
+	_, err3 := cloudprovider.GetCloudProvider(nil, "ovirt", config3)
 	if err3 == nil {
 		t.Fatalf("An error is expected when the uri is missing")
 	}
@@ -53,7 +53,7 @@ func TestOVirtCloudConfiguration(t *testing.T) {
 uri = https://localhost:8443/ovirt-engine/api
 `)
 
-	_, err4 := cloudprovider.GetCloudProvider("ovirt", config4)
+	_, err4 := cloudprovider.GetCloudProvider(nil, "ovirt", config4)
 	if err4 != nil {
 		t.Fatalf("Unexpected error creating the provider: %s", err4)
 	}
