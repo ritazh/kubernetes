@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	"os"
+	//"os"
 	"path/filepath"
 	"strings"
 	"sync"
