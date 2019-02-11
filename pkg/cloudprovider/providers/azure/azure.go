@@ -20,6 +20,8 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,8 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/tools/clientcmd"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	v1core "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/client-go/pkg/version"
@@ -430,12 +434,23 @@ func parseConfig(configReader io.Reader, clientBuilder cloudprovider.ControllerC
 
 	if configReader == nil {
 		klog.Infof("Azure cloud provider configReader is nil. Using configmap...")
-		client := clientBuilder.ClientOrDie("azure-cloud-provider")
-		if client == nil {
+		home := os.Getenv("HOME")
+		klog.Infof("home: %v", home)
+		kubeconfig := filepath.Join(home, ".kube", "config")
+		klog.Infof("kubeconfig: %v", kubeconfig)
+		// use the current context in kubeconfig
+		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+		if err != nil {
+			klog.Infof(err.Error())
+			return nil, err
+		}
+		// create the clientset
+		clientset, err := kubernetes.NewForConfig(config)
+		if clientset == nil {
 			return nil, fmt.Errorf("client from clientBuilder is nil")
 		}
 
-		configMaps, err := client.CoreV1().ConfigMaps(UIDNamespace).List(metav1.ListOptions{})
+		configMaps, err := clientset.CoreV1().ConfigMaps(UIDNamespace).List(metav1.ListOptions{})
 		if err != nil {
 			return nil, err
 		}
