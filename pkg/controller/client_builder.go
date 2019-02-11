@@ -112,7 +112,7 @@ func (b SAControllerClientBuilder) Config(name string) (*restclient.Config, erro
 	if err != nil {
 		return nil, err
 	}
-
+	klog.Infof("client_builder go sa %v", name)
 	var clientConfig *restclient.Config
 	fieldSelector := fields.SelectorFromSet(map[string]string{
 		api.SecretTypeField: string(v1.SecretTypeServiceAccountToken),
@@ -127,7 +127,7 @@ func (b SAControllerClientBuilder) Config(name string) (*restclient.Config, erro
 			return b.CoreClient.Secrets(b.Namespace).Watch(options)
 		},
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	_, err = watchtools.UntilWithSync(ctx, lw, &v1.Secret{}, nil,
 		func(event watch.Event) (bool, error) {
@@ -138,6 +138,7 @@ func (b SAControllerClientBuilder) Config(name string) (*restclient.Config, erro
 				return false, fmt.Errorf("error watching")
 
 			case watch.Added, watch.Modified:
+				klog.Infof("client_builder Config watch.Added")
 				secret, ok := event.Object.(*v1.Secret)
 				if !ok {
 					return false, fmt.Errorf("unexpected object type: %T", event.Object)
@@ -148,6 +149,7 @@ func (b SAControllerClientBuilder) Config(name string) (*restclient.Config, erro
 				if len(secret.Data[v1.ServiceAccountTokenKey]) == 0 {
 					return false, nil
 				}
+				klog.Infof("client_builder getAuthenticatedConfig")
 				validConfig, valid, err := b.getAuthenticatedConfig(sa, string(secret.Data[v1.ServiceAccountTokenKey]))
 				if err != nil {
 					klog.Warningf("error validating API token for %s/%s in secret %s: %v", sa.Namespace, sa.Name, secret.Name, err)
