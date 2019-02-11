@@ -434,7 +434,7 @@ func parseConfig(configReader io.Reader, clientBuilder cloudprovider.ControllerC
 
 	if configReader == nil {
 		klog.Infof("Azure cloud provider configReader is nil. Using configmap...")
-		home := os.Getenv("HOME")
+		home := "/home/azureuser"//os.Getenv("HOME")
 		klog.Infof("home: %v", home)
 		kubeconfig := filepath.Join(home, ".kube", "config")
 		klog.Infof("kubeconfig: %v", kubeconfig)
