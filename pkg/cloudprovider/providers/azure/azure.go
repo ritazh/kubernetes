@@ -20,7 +20,7 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	//"os"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -82,13 +82,6 @@ const (
 
 	// UIDConfig is the data keys for looking up the clusters UID
 	UIDConfig = "config"
-
-	// UIDLengthBytes is the length of a UID
-	UIDLengthBytes = 8
-
-	// Frequency of the updateFunc event handler being called
-	// This does not actually query the apiserver for current state - the local cache value is used.
-	updateFuncFrequency = 10 * time.Minute
 )
 
 var (
@@ -240,9 +233,9 @@ func init() {
 }
 
 // NewCloud returns a Cloud with initialized clients
-func NewCloud(configReader io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 	klog.Infof("Azure cloud provider NewCloud...")
-	config, err := parseConfig(configReader, clientBuilder)
+	config, err := parseConfig(configReader)
 	if err != nil {
 		return nil, err
 	}
@@ -427,14 +420,14 @@ func NewCloud(configReader io.Reader, clientBuilder cloudprovider.ControllerClie
 }
 
 // parseConfig returns a parsed configuration for an Azure cloudprovider config file
-func parseConfig(configReader io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (*Config, error) {
+func parseConfig(configReader io.Reader) (*Config, error) {
 	var config Config
 	var configContents []byte
 	var err error
 
 	if configReader == nil {
 		klog.Infof("Azure cloud provider configReader is nil. Using configmap...")
-		home := "/home/azureuser"//os.Getenv("HOME")
+		home := os.Getenv("HOME")
 		klog.Infof("home: %v", home)
 		kubeconfig := filepath.Join(home, ".kube", "config")
 		klog.Infof("kubeconfig: %v", kubeconfig)
@@ -455,7 +448,7 @@ func parseConfig(configReader io.Reader, clientBuilder cloudprovider.ControllerC
 			return nil, err
 		}
 		for _, cm := range configMaps.Items {
-			klog.Infof("RITA configmap=%v", cm.GetName())
+			klog.Infof("configmap=%v", cm.GetName())
 			if cm.GetName() == UIDConfigMapName {
 				if clusterCloudConfig, exists := cm.Data[UIDConfig]; exists {
 					configContents = []byte(clusterCloudConfig)

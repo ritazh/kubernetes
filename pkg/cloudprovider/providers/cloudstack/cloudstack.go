@@ -56,7 +56,7 @@ type CSCloud struct {
 }
 
 func init() {
-	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader) (cloudprovider.Interface, error) {
 		cfg, err := readConfig(config)
 		if err != nil {
 			return nil, err

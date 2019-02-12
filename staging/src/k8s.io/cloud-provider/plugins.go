@@ -29,7 +29,7 @@ import (
 // The config parameter provides an io.Reader handler to the factory in
 // order to load specific configurations. If no configuration is provided
 // the parameter is nil.
-type Factory func(config io.Reader, clientBuilder ControllerClientBuilder) (Interface, error)
+type Factory func(config io.Reader) (Interface, error)
 
 // All registered cloud providers.
 var (
@@ -79,14 +79,14 @@ func IsCloudProvider(name string) bool {
 // was known but failed to initialize. The config parameter specifies the
 // io.Reader handler of the configuration file for the cloud provider, or nil
 // for no configuration.
-func GetCloudProvider(clientBuilder ControllerClientBuilder, name string, config io.Reader) (Interface, error) {
+func GetCloudProvider(name string, config io.Reader) (Interface, error) {
 	providersMutex.Lock()
 	defer providersMutex.Unlock()
 	f, found := providers[name]
 	if !found {
 		return nil, nil
 	}
-	return f(config, clientBuilder)
+	return f(config)
 }
 
 // Detects if the string is an external cloud provider
@@ -95,7 +95,7 @@ func IsExternal(name string) bool {
 }
 
 // InitCloudProvider creates an instance of the named cloud provider.
-func InitCloudProvider(clientBuilder ControllerClientBuilder, name string, configFilePath string) (Interface, error) {
+func InitCloudProvider(name string, configFilePath string) (Interface, error) {
 	var cloud Interface
 	var err error
 
@@ -130,11 +130,11 @@ func InitCloudProvider(clientBuilder ControllerClientBuilder, name string, confi
 		}
 
 		defer config.Close()
-		cloud, err = GetCloudProvider(clientBuilder, name, config)
+		cloud, err = GetCloudProvider(name, config)
 	} else {
 		// Pass explicit nil so plugins can actually check for nil. See
 		// "Why is my nil error value not equal to nil?" in golang.org/doc/faq.
-		cloud, err = GetCloudProvider(clientBuilder, name, nil)
+		cloud, err = GetCloudProvider(name, nil)
 	}
 
 	if err != nil {

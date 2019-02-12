@@ -229,7 +229,7 @@ func readConfig(config io.Reader) (VSphereConfig, error) {
 
 func init() {
 	vclib.RegisterMetrics()
-	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader) (cloudprovider.Interface, error) {
 		// If vSphere.conf file is not present then it is worker node.
 		if config == nil {
 			return newWorkerNode()

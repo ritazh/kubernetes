@@ -231,7 +231,7 @@ type CloudConfig struct {
 func init() {
 	cloudprovider.RegisterCloudProvider(
 		ProviderName,
-		func(config io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+		func(config io.Reader) (cloudprovider.Interface, error) {
 			return newGCECloud(config)
 		})
 }
