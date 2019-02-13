@@ -22,6 +22,7 @@ import (
 	"k8s.io/klog"
 
 	"k8s.io/client-go/informers"
+	clientset "k8s.io/client-go/kubernetes"
 	cloudprovider "k8s.io/cloud-provider"
 )
 
