@@ -20,7 +20,6 @@ import (
 	"fmt"
 	"io"
 	"io/ioutil"
-	//"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -240,9 +239,9 @@ func init() {
 }
 
 // NewCloud returns a Cloud with initialized clients
-func NewCloud(configReader io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+func NewCloud(configReader io.Reader, clientset clientset.Interface) (cloudprovider.Interface, error) {
 	klog.Infof("Azure cloud provider NewCloud...")
-	config, err := parseConfig(configReader, clientBuilder)
+	config, err := parseConfig(configReader, clientset)
 	if err != nil {
 		return nil, err
 	}
@@ -427,28 +426,29 @@ func NewCloud(configReader io.Reader, clientBuilder cloudprovider.ControllerClie
 }
 
 // parseConfig returns a parsed configuration for an Azure cloudprovider config file
-func parseConfig(configReader io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (*Config, error) {
+func parseConfig(configReader io.Reader, clientset clientset.Interface) (*Config, error) {
 	var config Config
 	var configContents []byte
 	var err error
 
 	if configReader == nil {
 		klog.Infof("Azure cloud provider configReader is nil. Using configmap...")
-		home := "/home/azureuser"//os.Getenv("HOME")
-		klog.Infof("home: %v", home)
-		kubeconfig := filepath.Join(home, ".kube", "config")
-		klog.Infof("kubeconfig: %v", kubeconfig)
-		// use the current context in kubeconfig
-		config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
-		if err != nil {
-			klog.Infof(err.Error())
-			return nil, err
-		}
-		// create the clientset
-		clientset, err := kubernetes.NewForConfig(config)
-		if clientset == nil {
-			return nil, fmt.Errorf("client from clientBuilder is nil")
-		}
+		// home := "/home/azureuser"//os.Getenv("HOME")
+		// klog.Infof("home: %v", home)
+		// kubeconfig := filepath.Join(home, ".kube", "config")
+		// klog.Infof("kubeconfig: %v", kubeconfig)
+		// // use the current context in kubeconfig
+		// config, err := clientcmd.BuildConfigFromFlags("", kubeconfig)
+		// if err != nil {
+		// 	klog.Infof(err.Error())
+		// 	return nil, err
+		// }
+		// // create the clientset
+		// clientset, err := kubernetes.NewForConfig(config)
+		// if clientset == nil {
+		// 	return nil, fmt.Errorf("client from clientBuilder is nil")
+		// }
+
 
 		configMaps, err := clientset.CoreV1().ConfigMaps(UIDNamespace).List(metav1.ListOptions{})
 		if err != nil {

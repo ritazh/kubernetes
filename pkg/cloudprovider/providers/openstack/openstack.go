@@ -165,7 +165,7 @@ type Config struct {
 func init() {
 	registerMetrics()
 
-	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+	cloudprovider.RegisterCloudProvider(ProviderName, func(config io.Reader, clientset clientset.Interface) (cloudprovider.Interface, error) {
 		cfg, err := readConfig(config)
 		if err != nil {
 			return nil, err

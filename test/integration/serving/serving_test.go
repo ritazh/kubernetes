@@ -359,6 +359,6 @@ func intPtr(x int) *int {
 	return &x
 }
 
-func fakeCloudProviderFactory(io.Reader, clientBuilder cloudprovider.ControllerClientBuilder) (cloudprovider.Interface, error) {
+func fakeCloudProviderFactory(io.Reader, clientset clientset.Interface) (cloudprovider.Interface, error) {
 	return &fake.FakeCloud{}, nil
 }
