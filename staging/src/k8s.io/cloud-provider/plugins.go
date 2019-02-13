@@ -30,7 +30,7 @@ import (
 // The config parameter provides an io.Reader handler to the factory in
 // order to load specific configurations. If no configuration is provided
 // the parameter is nil.
-type Factory func(config io.Reader, clientBuilder ControllerClientBuilder) (Interface, error)
+type Factory func(config io.Reader, clientset clientset.Interface) (Interface, error)
 
 // All registered cloud providers.
 var (
