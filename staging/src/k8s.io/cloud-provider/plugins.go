@@ -22,6 +22,7 @@ import (
 	"os"
 	"sync"
 
+	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/klog"
 )
 
