@@ -38,6 +38,7 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/azure/auth"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/azure"
@@ -68,6 +69,15 @@ const (
 
 	externalResourceGroupLabel = "kubernetes.azure.com/resource-group"
 	managedByAzureLabel        = "kubernetes.azure.com/managed"
+
+	// ConfigMapName is the name of the Cloud Config configmap.
+	ConfigMapName = "cloud-config"
+
+ 	// ConfigMapNamespace is the namespace which contains the above config map
+	ConfigMapNamespace = metav1.NamespaceSystem
+
+ 	// ConfigMapConfig is the data keys for cloud config
+	ConfigMapConfig = "config"
 )
 
 var (
@@ -220,9 +230,14 @@ func init() {
 
 // NewCloud returns a Cloud with initialized clients
 func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
-	config, err := parseConfig(configReader)
+	az := Cloud{}
+	return &az, nil
+}
+
+func (az *Cloud) InitCloud (configReader io.Reader, clientset clientset.Interface) (error) {
+	config, err := parseConfig(configReader, clientset)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if config.VMType == "" {
@@ -232,12 +247,12 @@ func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 
 	env, err := auth.ParseAzureEnvironment(config.Cloud)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	servicePrincipalToken, err := auth.GetServicePrincipalToken(&config.AzureAuthConfig, env)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	// operationPollRateLimiter.Accept() is a no-op if rate limits are configured off.
@@ -335,7 +350,7 @@ func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 		CloudProviderBackoffDuration:   config.CloudProviderBackoffDuration,
 		ShouldOmitCloudProviderBackoff: config.shouldOmitCloudProviderBackoff(),
 	}
-	az := Cloud{
+	*az = Cloud{
 		Config:                 *config,
 		Environment:            *env,
 		nodeZones:              map[string]sets.String{},
@@ -362,7 +377,7 @@ func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 
 	az.metadata, err = NewInstanceMetadataService(metadataURL)
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	if az.MaximumLoadBalancerRuleCount == 0 {
@@ -370,51 +385,70 @@ func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 	}
 
 	if strings.EqualFold(vmTypeVMSS, az.Config.VMType) {
-		az.vmSet, err = newScaleSet(&az)
+		az.vmSet, err = newScaleSet(az)
 		if err != nil {
-			return nil, err
+			return err
 		}
 	} else {
-		az.vmSet = newAvailabilitySet(&az)
+		az.vmSet = newAvailabilitySet(az)
 	}
 
 	az.vmCache, err = az.newVMCache()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	az.lbCache, err = az.newLBCache()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	az.nsgCache, err = az.newNSGCache()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
 	az.rtCache, err = az.newRouteTableCache()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	if err := initDiskControllers(&az); err != nil {
-		return nil, err
+	if err := initDiskControllers(az); err != nil {
+		return err
 	}
-	return &az, nil
+	return nil
 }
 
 // parseConfig returns a parsed configuration for an Azure cloudprovider config file
-func parseConfig(configReader io.Reader) (*Config, error) {
+func parseConfig(configReader io.Reader, clientset clientset.Interface) (*Config, error) {
 	var config Config
+	var configContents []byte
+	var err error
 
 	if configReader == nil {
-		return &config, nil
-	}
+		klog.Infof("Azure cloud provider configReader is nil. Using configmap...")
+		configMaps, err := clientset.CoreV1().ConfigMaps(ConfigMapNamespace).List(metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		for _, cm := range configMaps.Items {
+			klog.Infof("RITA configmap=%v", cm.GetName())
+			if cm.GetName() == ConfigMapName {
+				if clusterCloudConfig, exists := cm.Data[ConfigMapConfig]; exists {
+					configContents = []byte(clusterCloudConfig)
+				} else {
+					return nil, fmt.Errorf("Expected %s does not exist in configmap", ConfigMapConfig)
+				}
+				break
+			}
+		}
+	} else {
+		klog.Infof("Azure cloud provider configReader is provided")
 
-	configContents, err := ioutil.ReadAll(configReader)
-	if err != nil {
-		return nil, err
+		configContents, err = ioutil.ReadAll(configReader)
+		if err != nil {
+			return nil, err
+		}
 	}
 	err = yaml.Unmarshal(configContents, &config)
 	if err != nil {
@@ -430,6 +464,7 @@ func (az *Cloud) Initialize(clientBuilder cloudprovider.ControllerClientBuilder,
 	az.eventBroadcaster = record.NewBroadcaster()
 	az.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: az.kubeClient.CoreV1().Events("")})
 	az.eventRecorder = az.eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "azure-cloud-provider"})
+	az.InitCloud(nil, az.kubeClient)
 }
 
 // LoadBalancer returns a balancer interface. Also returns true if the interface is supported, false otherwise.
