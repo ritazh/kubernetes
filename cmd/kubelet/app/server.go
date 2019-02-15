@@ -63,6 +63,7 @@ import (
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	api "k8s.io/kubernetes/pkg/apis/core"
 	"k8s.io/kubernetes/pkg/capabilities"
+	"k8s.io/kubernetes/pkg/controller"
 	"k8s.io/kubernetes/pkg/credentialprovider"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/kubernetes/pkg/kubelet"
@@ -560,7 +561,12 @@ func run(s *options.KubeletServer, kubeDeps *kubelet.Dependencies, stopCh <-chan
 		if err != nil {
 			return fmt.Errorf("failed to initialize kubelet client: %v", err)
 		}
-
+		rootClientBuilder := controller.SimpleControllerClientBuilder{
+			ClientConfig: clientConfig,
+		}
+		klog.Infof("cloud initilize...")
+		kubeDeps.Cloud.Initialize(rootClientBuilder, stopCh)
+		klog.Infof("cloud initilized...")
 		// make a separate client for events
 		eventClientConfig := *clientConfig
 		eventClientConfig.QPS = float32(s.EventRecordQPS)
