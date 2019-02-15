@@ -185,6 +185,7 @@ type Cloud struct {
 	resourceRequestBackoff  wait.Backoff
 	metadata                *InstanceMetadataService
 	vmSet                   VMSet
+	Created                 bool
 
 	// Lock for access to node caches, includes nodeZones, nodeResourceGroups, and unmanagedNodes.
 	nodeCachesLock sync.Mutex
@@ -230,7 +231,13 @@ func init() {
 
 // NewCloud returns a Cloud with initialized clients
 func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
-	az := Cloud{}
+	az := Cloud{
+		Created: false,
+	}
+	if configReader != nil {
+		az.InitCloud(configReader, nil)
+	}
+
 	return &az, nil
 }
 
@@ -350,7 +357,7 @@ func (az *Cloud) InitCloud (configReader io.Reader, clientset clientset.Interfac
 		CloudProviderBackoffDuration:   config.CloudProviderBackoffDuration,
 		ShouldOmitCloudProviderBackoff: config.shouldOmitCloudProviderBackoff(),
 	}
-	*az = Cloud{
+	az = &Cloud{
 		Config:                 *config,
 		Environment:            *env,
 		nodeZones:              map[string]sets.String{},
@@ -358,6 +365,7 @@ func (az *Cloud) InitCloud (configReader io.Reader, clientset clientset.Interfac
 		unmanagedNodes:         sets.NewString(),
 		routeCIDRs:             map[string]string{},
 		resourceRequestBackoff: resourceRequestBackoff,
+		Created:                true,
 
 		DisksClient:                     newAzDisksClient(azClientConfig),
 		RoutesClient:                    newAzRoutesClient(azClientConfig),
@@ -464,7 +472,12 @@ func (az *Cloud) Initialize(clientBuilder cloudprovider.ControllerClientBuilder,
 	az.eventBroadcaster = record.NewBroadcaster()
 	az.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: az.kubeClient.CoreV1().Events("")})
 	az.eventRecorder = az.eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "azure-cloud-provider"})
-	az.InitCloud(nil, az.kubeClient)
+	if az.Created == false {
+		klog.Infof("Azure cloud provider has not been fully created, InitCloud with client...")
+		az.InitCloud(nil, az.kubeClient)
+	} else {
+		klog.Infof("Azure cloud provider has been fully created...")
+	}
 }
 
 // LoadBalancer returns a balancer interface. Also returns true if the interface is supported, false otherwise.
