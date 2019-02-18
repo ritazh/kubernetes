@@ -38,6 +38,7 @@ import (
 	cloudprovider "k8s.io/cloud-provider"
 	"k8s.io/kubernetes/pkg/cloudprovider/providers/azure/auth"
 	kubeletapis "k8s.io/kubernetes/pkg/kubelet/apis"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/Azure/go-autorest/autorest"
 	"github.com/Azure/go-autorest/autorest/azure"
@@ -68,6 +69,15 @@ const (
 
 	externalResourceGroupLabel = "kubernetes.azure.com/resource-group"
 	managedByAzureLabel        = "kubernetes.azure.com/managed"
+
+ 	// ConfigMapName is the name of the Cloud Config configmap.
+	ConfigMapName = "cloud-config"
+
+	// ConfigMapNamespace is the namespace which contains the above config map
+	ConfigMapNamespace = metav1.NamespaceSystem
+
+		// ConfigMapConfig is the data keys for cloud config
+	ConfigMapConfig = "config"
 )
 
 var (
@@ -175,6 +185,7 @@ type Cloud struct {
 	resourceRequestBackoff  wait.Backoff
 	metadata                *InstanceMetadataService
 	vmSet                   VMSet
+	Created                 bool
 
 	// Lock for access to node caches, includes nodeZones, nodeResourceGroups, and unmanagedNodes.
 	nodeCachesLock sync.Mutex
@@ -220,7 +231,7 @@ func init() {
 
 // NewCloud returns a Cloud with initialized clients
 func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
-	config, err := parseConfig(configReader)
+	config, err := parseConfig(configReader, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -359,7 +370,11 @@ func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 		VirtualMachineScaleSetVMsClient: newAzVirtualMachineScaleSetVMsClient(azClientConfig),
 		FileClient:                      &azureFileClient{env: *env},
 	}
-
+	if configReader == nil {
+		az.Created = false
+	} else {
+		az.Created = true
+	}
 	az.metadata, err = NewInstanceMetadataService(metadataURL)
 	if err != nil {
 		return nil, err
@@ -405,17 +420,41 @@ func NewCloud(configReader io.Reader) (cloudprovider.Interface, error) {
 }
 
 // parseConfig returns a parsed configuration for an Azure cloudprovider config file
-func parseConfig(configReader io.Reader) (*Config, error) {
+func parseConfig(configReader io.Reader, clientset clientset.Interface) (*Config, error) {
 	var config Config
+	var configContents []byte
+	var err error
 
-	if configReader == nil {
+	if configReader == nil && clientset == nil {
+		klog.Infof("Azure cloud provider return empty config")
 		return &config, nil
 	}
-
-	configContents, err := ioutil.ReadAll(configReader)
-	if err != nil {
-		return nil, err
+	
+	if configReader == nil {
+		klog.Infof("Azure cloud provider configReader is nil. Using configmap...")
+		configMaps, err := clientset.CoreV1().ConfigMaps(ConfigMapNamespace).List(metav1.ListOptions{})
+		if err != nil {
+			return nil, err
+		}
+		for _, cm := range configMaps.Items {
+			klog.Infof("RITA configmap=%v", cm.GetName())
+			if cm.GetName() == ConfigMapName {
+				if clusterCloudConfig, exists := cm.Data[ConfigMapConfig]; exists {
+					configContents = []byte(clusterCloudConfig)
+				} else {
+					return nil, fmt.Errorf("Expected %s does not exist in configmap", ConfigMapConfig)
+				}
+				break
+			}
+		}
+	} else {
+		klog.Infof("Azure cloud provider configReader is provided")
+		configContents, err = ioutil.ReadAll(configReader)
+		if err != nil {
+			return nil, err
+		}
 	}
+	
 	err = yaml.Unmarshal(configContents, &config)
 	if err != nil {
 		return nil, err
@@ -430,6 +469,154 @@ func (az *Cloud) Initialize(clientBuilder cloudprovider.ControllerClientBuilder,
 	az.eventBroadcaster = record.NewBroadcaster()
 	az.eventBroadcaster.StartRecordingToSink(&v1core.EventSinkImpl{Interface: az.kubeClient.CoreV1().Events("")})
 	az.eventRecorder = az.eventBroadcaster.NewRecorder(scheme.Scheme, v1.EventSource{Component: "azure-cloud-provider"})
+
+	if az.Created == false {
+		klog.Infof("Azure cloud provider need to create in initialize...")
+		config, err := parseConfig(nil, az.kubeClient)
+		if err != nil {
+			return
+		}
+
+		if config.VMType == "" {
+			// default to standard vmType if not set.
+			config.VMType = vmTypeStandard
+		}
+
+		env, err := auth.ParseAzureEnvironment(config.Cloud)
+		if err != nil {
+			return
+		}
+
+		servicePrincipalToken, err := auth.GetServicePrincipalToken(&config.AzureAuthConfig, env)
+		if err != nil {
+			return
+		}
+
+		// operationPollRateLimiter.Accept() is a no-op if rate limits are configured off.
+		operationPollRateLimiter := flowcontrol.NewFakeAlwaysRateLimiter()
+		operationPollRateLimiterWrite := flowcontrol.NewFakeAlwaysRateLimiter()
+
+		// If reader is provided (and no writer) we will
+		// use the same value for both.
+		if config.CloudProviderRateLimit {
+			// Assign rate limit defaults if no configuration was passed in
+			if config.CloudProviderRateLimitQPS == 0 {
+				config.CloudProviderRateLimitQPS = rateLimitQPSDefault
+			}
+			if config.CloudProviderRateLimitBucket == 0 {
+				config.CloudProviderRateLimitBucket = rateLimitBucketDefault
+			}
+			if config.CloudProviderRateLimitQPSWrite == 0 {
+				config.CloudProviderRateLimitQPSWrite = rateLimitQPSDefault
+			}
+			if config.CloudProviderRateLimitBucketWrite == 0 {
+				config.CloudProviderRateLimitBucketWrite = rateLimitBucketDefault
+			}
+
+			operationPollRateLimiter = flowcontrol.NewTokenBucketRateLimiter(
+				config.CloudProviderRateLimitQPS,
+				config.CloudProviderRateLimitBucket)
+
+			operationPollRateLimiterWrite = flowcontrol.NewTokenBucketRateLimiter(
+				config.CloudProviderRateLimitQPSWrite,
+				config.CloudProviderRateLimitBucketWrite)
+
+			klog.V(2).Infof("Azure cloudprovider (read ops) using rate limit config: QPS=%g, bucket=%d",
+				config.CloudProviderRateLimitQPS,
+				config.CloudProviderRateLimitBucket)
+
+			klog.V(2).Infof("Azure cloudprovider (write ops) using rate limit config: QPS=%g, bucket=%d",
+				config.CloudProviderRateLimitQPSWrite,
+				config.CloudProviderRateLimitBucketWrite)
+		}
+
+		// Conditionally configure resource request backoff
+		resourceRequestBackoff := wait.Backoff{
+			Steps: 1,
+		}
+		if config.CloudProviderBackoff {
+			// Assign backoff defaults if no configuration was passed in
+			if config.CloudProviderBackoffRetries == 0 {
+				config.CloudProviderBackoffRetries = backoffRetriesDefault
+			}
+			if config.CloudProviderBackoffDuration == 0 {
+				config.CloudProviderBackoffDuration = backoffDurationDefault
+			}
+			if config.CloudProviderBackoffExponent == 0 {
+				config.CloudProviderBackoffExponent = backoffExponentDefault
+			} else if config.shouldOmitCloudProviderBackoff() {
+				klog.Warning("Azure cloud provider config 'cloudProviderBackoffExponent' has been deprecated for 'v2' backoff mode. 2 is always used as the backoff exponent.")
+			}
+			if config.CloudProviderBackoffJitter == 0 {
+				config.CloudProviderBackoffJitter = backoffJitterDefault
+			} else if config.shouldOmitCloudProviderBackoff() {
+				klog.Warning("Azure cloud provider config 'cloudProviderBackoffJitter' has been deprecated for 'v2' backoff mode.")
+			}
+
+			if !config.shouldOmitCloudProviderBackoff() {
+				resourceRequestBackoff = wait.Backoff{
+					Steps:    config.CloudProviderBackoffRetries,
+					Factor:   config.CloudProviderBackoffExponent,
+					Duration: time.Duration(config.CloudProviderBackoffDuration) * time.Second,
+					Jitter:   config.CloudProviderBackoffJitter,
+				}
+			}
+			klog.V(2).Infof("Azure cloudprovider using try backoff: retries=%d, exponent=%f, duration=%d, jitter=%f",
+				config.CloudProviderBackoffRetries,
+				config.CloudProviderBackoffExponent,
+				config.CloudProviderBackoffDuration,
+				config.CloudProviderBackoffJitter)
+		} else {
+			// CloudProviderBackoffRetries will be set to 1 by default as the requirements of Azure SDK.
+			config.CloudProviderBackoffRetries = 1
+			config.CloudProviderBackoffDuration = backoffDurationDefault
+		}
+
+		// Do not add master nodes to standard LB by default.
+		if config.ExcludeMasterFromStandardLB == nil {
+			config.ExcludeMasterFromStandardLB = &defaultExcludeMasterFromStandardLB
+		}
+
+		azClientConfig := &azClientConfig{
+			subscriptionID:                 config.SubscriptionID,
+			resourceManagerEndpoint:        env.ResourceManagerEndpoint,
+			servicePrincipalToken:          servicePrincipalToken,
+			rateLimiterReader:              operationPollRateLimiter,
+			rateLimiterWriter:              operationPollRateLimiterWrite,
+			CloudProviderBackoffRetries:    config.CloudProviderBackoffRetries,
+			CloudProviderBackoffDuration:   config.CloudProviderBackoffDuration,
+			ShouldOmitCloudProviderBackoff: config.shouldOmitCloudProviderBackoff(),
+		}
+
+		az.Config = *config
+		az.Environment = *env
+		az.resourceRequestBackoff = resourceRequestBackoff
+		az.DisksClient = newAzDisksClient(azClientConfig)
+		az.RoutesClient = newAzRoutesClient(azClientConfig)
+		az.SubnetsClient = newAzSubnetsClient(azClientConfig)
+		az.InterfacesClient = newAzInterfacesClient(azClientConfig)
+		az.RouteTablesClient = newAzRouteTablesClient(azClientConfig)
+		az.LoadBalancerClient = newAzLoadBalancersClient(azClientConfig)
+		az.SecurityGroupsClient = newAzSecurityGroupsClient(azClientConfig)
+		az.StorageAccountClient = newAzStorageAccountClient(azClientConfig)
+		az.VirtualMachinesClient = newAzVirtualMachinesClient(azClientConfig)
+		az.PublicIPAddressesClient = newAzPublicIPAddressesClient(azClientConfig)
+		az.VirtualMachineSizesClient = newAzVirtualMachineSizesClient(azClientConfig)
+		az.VirtualMachineScaleSetsClient = newAzVirtualMachineScaleSetsClient(azClientConfig)
+		az.VirtualMachineScaleSetVMsClient = newAzVirtualMachineScaleSetVMsClient(azClientConfig)
+		az.FileClient = &azureFileClient{env: *env}
+		if strings.EqualFold(vmTypeVMSS, az.Config.VMType) {
+			az.vmSet, err = newScaleSet(az)
+			if err != nil {
+				return
+			}
+		} else {
+			az.vmSet = newAvailabilitySet(az)
+		}
+
+		az.Created = true
+		klog.Infof("Azure cloud provider rset all cloud properties in initialize...")
+	}
 }
 
 // LoadBalancer returns a balancer interface. Also returns true if the interface is supported, false otherwise.
