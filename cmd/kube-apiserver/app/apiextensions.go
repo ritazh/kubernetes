@@ -20,6 +20,8 @@ limitations under the License.
 package app
 
 import (
+	"fmt"
+
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	apiextensionsapiserver "k8s.io/apiextensions-apiserver/pkg/apiserver"
@@ -30,9 +32,12 @@ import (
 	"k8s.io/apiserver/pkg/features"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
+	"k8s.io/apiserver/pkg/server/options/encryptionconfig"
+	"k8s.io/apiserver/pkg/storage/value"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/apiserver/pkg/util/webhook"
 	kubeexternalinformers "k8s.io/client-go/informers"
+	"k8s.io/klog/v2"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
 )
 
@@ -63,6 +68,16 @@ func createAPIExtensionsConfig(
 		return nil, err
 	}
 
+	transformerOverrides := make(map[schema.GroupResource]value.Transformer)
+	if len(commandOptions.Etcd.EncryptionProviderConfigFilepath) > 0 {
+		var err error
+		stopCh := make(chan struct{})
+		transformerOverrides, err = encryptionconfig.GetTransformerOverrides(commandOptions.Etcd.EncryptionProviderConfigFilepath, stopCh)
+		if err != nil {
+			return nil, err
+		}
+	}
+
 	// copy the etcd options so we don't mutate originals.
 	etcdOptions := *commandOptions.Etcd
 	etcdOptions.StorageConfig.Paging = utilfeature.DefaultFeatureGate.Enabled(features.APIListChunking)
@@ -70,7 +85,8 @@ func createAPIExtensionsConfig(
 	etcdOptions.StorageConfig.Codec = apiextensionsapiserver.Codecs.LegacyCodec(v1beta1.SchemeGroupVersion, v1.SchemeGroupVersion)
 	// prefer the more compact serialization (v1beta1) for storage until https://issue.k8s.io/82292 is resolved for objects whose v1 serialization is too big but whose v1beta1 serialization can be stored
 	etcdOptions.StorageConfig.EncodeVersioner = runtime.NewMultiGroupVersioner(v1beta1.SchemeGroupVersion, schema.GroupKind{Group: v1beta1.GroupName})
-	genericConfig.RESTOptionsGetter = &genericoptions.SimpleRestOptionsFactory{Options: etcdOptions}
+	genericConfig.RESTOptionsGetter = &genericoptions.SimpleRestOptionsFactory{Options: etcdOptions, TransformerOverrides: transformerOverrides}
+	klog.Info("just set a rest options getter: " + fmt.Sprintf("%+v", genericConfig.RESTOptionsGetter))
 
 	// override MergedResourceConfig with apiextensions defaults and registry
 	if err := commandOptions.APIEnablement.ApplyTo(
