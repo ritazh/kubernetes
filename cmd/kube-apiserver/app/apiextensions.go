@@ -50,6 +50,9 @@ func createAPIExtensionsConfig(
 	serviceResolver webhook.ServiceResolver,
 	authResolverWrapper webhook.AuthenticationInfoResolverWrapper,
 ) (*apiextensionsapiserver.Config, error) {
+
+	klog.Info("RITA createAPIExtensionsConfig")
+
 	// make a shallow copy to let us twiddle a few things
 	// most of the config actually remains the same.  We only need to mess with a couple items related to the particulars of the apiextensions
 	genericConfig := kubeAPIServerConfig
@@ -71,8 +74,7 @@ func createAPIExtensionsConfig(
 	transformerOverrides := make(map[schema.GroupResource]value.Transformer)
 	if len(commandOptions.Etcd.EncryptionProviderConfigFilepath) > 0 {
 		var err error
-		stopCh := make(chan struct{})
-		transformerOverrides, err = encryptionconfig.GetTransformerOverrides(commandOptions.Etcd.EncryptionProviderConfigFilepath, stopCh)
+		transformerOverrides, err = encryptionconfig.GetTransformerOverrides(commandOptions.Etcd.EncryptionProviderConfigFilepath, genericConfig.DrainedNotify())
 		if err != nil {
 			return nil, err
 		}
@@ -86,7 +88,8 @@ func createAPIExtensionsConfig(
 	// prefer the more compact serialization (v1beta1) for storage until https://issue.k8s.io/82292 is resolved for objects whose v1 serialization is too big but whose v1beta1 serialization can be stored
 	etcdOptions.StorageConfig.EncodeVersioner = runtime.NewMultiGroupVersioner(v1beta1.SchemeGroupVersion, schema.GroupKind{Group: v1beta1.GroupName})
 	genericConfig.RESTOptionsGetter = &genericoptions.SimpleRestOptionsFactory{Options: etcdOptions, TransformerOverrides: transformerOverrides}
-	klog.Info("just set a rest options getter: " + fmt.Sprintf("%+v", genericConfig.RESTOptionsGetter))
+
+	klog.Info("RITA just set a rest options getter: " + fmt.Sprintf("%+v", genericConfig.RESTOptionsGetter))
 
 	// override MergedResourceConfig with apiextensions defaults and registry
 	if err := commandOptions.APIEnablement.ApplyTo(
@@ -102,7 +105,7 @@ func createAPIExtensionsConfig(
 			SharedInformerFactory: externalInformers,
 		},
 		ExtraConfig: apiextensionsapiserver.ExtraConfig{
-			CRDRESTOptionsGetter: apiextensionsoptions.NewCRDRESTOptionsGetter(etcdOptions),
+			CRDRESTOptionsGetter: apiextensionsoptions.NewCRDRESTOptionsGetter(etcdOptions, transformerOverrides),
 			MasterCount:          masterCount,
 			AuthResolverWrapper:  authResolverWrapper,
 			ServiceResolver:      serviceResolver,

@@ -69,6 +69,7 @@ type transformTest struct {
 	restClient        *kubernetes.Clientset
 	ns                *corev1.Namespace
 	secret            *corev1.Secret
+	resourceName      string
 }
 
 func newTransformTest(l kubeapiservertesting.Logger, transformerConfigYAML string) (*transformTest, error) {
@@ -148,6 +149,48 @@ func (e *transformTest) run(unSealSecretFunc unSealSecret, expectedEnvelopePrefi
 	}
 }
 
+func (e *transformTest) runAll(unSealSecretFunc unSealSecret, expectedEnvelopePrefix string, kind string, name string) {
+	path := e.getETCDPathForAll(kind, name)
+	response, err := e.readRawRecordFromETCD(path)
+	if err != nil {
+		e.logger.Errorf("failed to read from etcd: %v", err)
+		return
+	}
+
+	if !bytes.HasPrefix(response.Kvs[0].Value, []byte(expectedEnvelopePrefix)) {
+		e.logger.Errorf("expected data to be prefixed with %s, but got %s, path: %s",
+			expectedEnvelopePrefix, response.Kvs[0].Value, path)
+		return
+	}
+
+	// etcd path of the key is used as the authenticated context - need to pass it to decrypt
+	ctx := context.Background()
+	dataCtx := value.DefaultContext([]byte(e.getETCDPathForAll(kind, name)))
+	// Envelope header precedes the cipherTextPayload
+	sealedData := response.Kvs[0].Value[len(expectedEnvelopePrefix):]
+	transformerConfig, err := e.getEncryptionConfig()
+	if err != nil {
+		e.logger.Errorf("failed to parse transformer config: %v", err)
+	}
+	v, err := unSealSecretFunc(ctx, sealedData, dataCtx, *transformerConfig)
+	if err != nil {
+		e.logger.Errorf("failed to unseal secret: %v", err)
+		return
+	}
+	if !strings.Contains(string(v), secretVal) {
+		e.logger.Errorf("expected %q after decryption, but got %q", secretVal, string(v))
+	}
+
+	// CR should be un-enveloped on direct reads from Kube API Server.
+	// s, err := e.restClient.CoreV1().Secrets(testNamespace).Get(context.TODO(), testSecret, metav1.GetOptions{})
+	// if err != nil {
+	// 	e.logger.Errorf("failed to get CR from %s, err: %v", testNamespace, err)
+	// }
+	// if secretVal != string(s.Data[secretKey]) {
+	// 	e.logger.Errorf("expected %s from KubeAPI, but got %s", secretVal, string(s.Data[secretKey]))
+	// }
+}
+
 func (e *transformTest) benchmark(b *testing.B) {
 	for i := 0; i < b.N; i++ {
 		_, err := e.createSecret(e.secret.Name+strconv.Itoa(i), e.ns.Name)
@@ -159,6 +202,10 @@ func (e *transformTest) benchmark(b *testing.B) {
 
 func (e *transformTest) getETCDPath() string {
 	return fmt.Sprintf("/%s/secrets/%s/%s", e.storageConfig.Prefix, e.ns.Name, e.secret.Name)
+}
+
+func (e *transformTest) getETCDPathForAll(kind string, name string) string {
+	return fmt.Sprintf("/%s/%s/%s", e.storageConfig.Prefix, kind, name)
 }
 
 func (e *transformTest) getRawSecretFromETCD() ([]byte, error) {

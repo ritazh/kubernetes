@@ -24,15 +24,18 @@ import (
 
 	"github.com/spf13/pflag"
 	oteltrace "go.opentelemetry.io/otel/trace"
+	
 
 	v1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	"k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1beta1"
 	"k8s.io/apiextensions-apiserver/pkg/apiserver"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	genericoptions "k8s.io/apiserver/pkg/server/options"
+	"k8s.io/apiserver/pkg/storage/value"
 	"k8s.io/apiserver/pkg/util/proxy"
 	"k8s.io/apiserver/pkg/util/webhook"
 	corev1 "k8s.io/client-go/listers/core/v1"
@@ -119,7 +122,7 @@ func (o CustomResourceDefinitionsServerOptions) Config() (*apiserver.Config, err
 }
 
 // NewCRDRESTOptionsGetter create a RESTOptionsGetter for CustomResources.
-func NewCRDRESTOptionsGetter(etcdOptions genericoptions.EtcdOptions) genericregistry.RESTOptionsGetter {
+func NewCRDRESTOptionsGetter(etcdOptions genericoptions.EtcdOptions, transformerOverrides map[schema.GroupResource]value.Transformer) genericregistry.RESTOptionsGetter {
 	ret := apiserver.CRDRESTOptionsGetter{
 		StorageConfig:             etcdOptions.StorageConfig,
 		StoragePrefix:             etcdOptions.StorageConfig.Prefix,
@@ -129,6 +132,7 @@ func NewCRDRESTOptionsGetter(etcdOptions genericoptions.EtcdOptions) genericregi
 		DeleteCollectionWorkers:   etcdOptions.DeleteCollectionWorkers,
 		CountMetricPollPeriod:     etcdOptions.StorageConfig.CountMetricPollPeriod,
 		StorageObjectCountTracker: etcdOptions.StorageConfig.StorageObjectCountTracker,
+		TransformerOverrides:      transformerOverrides,
 	}
 	ret.StorageConfig.Codec = unstructured.UnstructuredJSONScheme
 

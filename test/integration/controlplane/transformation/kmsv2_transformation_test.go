@@ -29,7 +29,10 @@ import (
 	"time"
 
 	"github.com/gogo/protobuf/proto"
+	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
 	"k8s.io/apiserver/pkg/features"
@@ -38,8 +41,10 @@ import (
 	kmstypes "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/v2alpha1"
 	kmsv2mock "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/testing/v2alpha1"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+	"k8s.io/client-go/dynamic"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	kmsv2api "k8s.io/kms/apis/v2alpha1"
+	"k8s.io/kubernetes/test/integration/etcd"
 )
 
 type envelopekmsv2 struct {
@@ -272,4 +277,73 @@ resources:
 	pluginMock2.EnterFailedState()
 	mustBeHealthy(t, "kms-provider-0", test.kubeAPIServer.ClientConfig)
 	mustBeUnHealthy(t, "kms-provider-1", test.kubeAPIServer.ClientConfig)
+}
+
+func TestEncryptAll(t *testing.T) {
+	// check resources provided by the three servers that we have wired together
+	// - pods and config maps from KAS
+	// - CRDs and CRs from API extensions
+	// - API services from aggregator
+	encryptionConfig := `
+kind: EncryptionConfiguration
+apiVersion: apiserver.config.k8s.io/v1
+resources:
+- resources:
+  - pods
+  - secrets
+  - configmaps
+  - customresourcedefinitions.apiextensions.k8s.io
+  - pandas.awesome.bears.com
+  - apiservices.apiregistration.k8s.io
+  providers:
+  - aescbc:
+      keys:
+      - name: c29tZS1rZXk=
+        secret: MDEyMzQ1NjcwMTIzNDU2Nw==
+`
+
+	test, err := newTransformTest(t, encryptionConfig)
+	if err != nil {
+		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
+	}
+	t.Cleanup(test.cleanUp)
+
+	// the storage registry for CRs is dynamic so create one to exercise the wiring
+	etcd.CreateTestCRDs(t, apiextensionsclientset.NewForConfigOrDie(test.kubeAPIServer.ClientConfig), false, etcd.GetCustomResourceDefinitionData()...)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	t.Cleanup(cancel)
+
+	gvr := schema.GroupVersionResource{Group: "awesome.bears.com", Version: "v1", Resource: "pandas"}
+	stub := etcd.GetEtcdStorageData()[gvr].Stub
+	dynamicClient, obj, err := etcd.JSONToUnstructured(stub, "", &meta.RESTMapping{
+		Resource:         gvr,
+		GroupVersionKind: gvr.GroupVersion().WithKind("Panda"),
+		Scope:            meta.RESTScopeRoot,
+	}, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	createdObj, err := dynamicClient.Create(ctx, obj, metav1.CreateOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if obj.GroupVersionKind() != createdObj.GroupVersionKind() {
+		t.Fatalf("created object doesn't have the same gvk as original object: got %v, expected %v",
+			createdObj.GroupVersionKind(),
+			obj.GroupVersionKind())
+	}
+	//t.Fatalf("createdObj: %v", createdObj)
+	if _, err := dynamicClient.Get(context.TODO(), obj.GetName(), metav1.GetOptions{}); err != nil {
+		t.Fatalf("object should exist: %v", err)
+	}
+	test.secret, err = test.createSecret("ritasecret1", testNamespace)
+	if err != nil {
+		t.Fatalf("Failed to create test secret, error: %v", err)
+	}
+	// CRD
+	//test.runAll(unSealWithCBCTransformer, aesCBCPrefix, "apiextensions.k8s.io/customresourcedefinitions", "pandas.awesome.bears.com") // registry/apiextensions.k8s.io/customresourcedefinitions/pandas.awesome.bears.com
+
+	test.runAll(unSealWithCBCTransformer, aesCBCPrefix, "awesome.bears.com/pandas", "cr3panda")
+	//test.run(unSealWithCBCTransformer, aesCBCPrefix)
 }
