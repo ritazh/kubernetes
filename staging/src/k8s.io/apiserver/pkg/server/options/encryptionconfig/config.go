@@ -49,6 +49,8 @@ import (
 	"k8s.io/apiserver/pkg/storage/value/encrypt/identity"
 	"k8s.io/apiserver/pkg/storage/value/encrypt/secretbox"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
+
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -78,6 +80,7 @@ type kmsPluginProbe struct {
 }
 
 type kmsv2PluginProbe struct {
+	keyID        atomic.Pointer[string]
 	name         string
 	ttl          time.Duration
 	service      envelopekmsv2.Service
@@ -262,6 +265,9 @@ func (h *kmsv2PluginProbe) check(ctx context.Context) error {
 		h.ttl = kmsPluginHealthzNegativeTTL
 		return fmt.Errorf("failed to perform status section of the healthz check for KMS Provider %s, error: %w", h.name, err)
 	}
+	if len(p.KeyID) > 0 {
+		h.keyID.Store(&p.KeyID)
+	}
 
 	if err := isKMSv2ProviderHealthy(h.name, p); err != nil {
 		h.lastResponse = &kmsPluginHealthzResponse{err: err, received: time.Now()}
@@ -272,6 +278,15 @@ func (h *kmsv2PluginProbe) check(ctx context.Context) error {
 	h.lastResponse = &kmsPluginHealthzResponse{err: nil, received: time.Now()}
 	h.ttl = kmsPluginHealthzPositiveTTL
 	return nil
+}
+
+// getCurrentKeyID returns the latest keyID from the Status() method or err if keyID is empty
+func (h *kmsv2PluginProbe) getCurrentKeyID(ctx context.Context) (string, error) {
+	keyID := *h.keyID.Load()
+	if len(keyID) == 0 {
+		return "", fmt.Errorf("got unexpected empty keyID")
+	}
+	return keyID, nil
 }
 
 // isKMSv2ProviderHealthy checks if the KMSv2-Plugin is healthy.
@@ -542,10 +557,23 @@ func kmsPrefixTransformer(config *apiserverconfig.KMSConfiguration, stopCh <-cha
 			l:            &sync.Mutex{},
 			lastResponse: &kmsPluginHealthzResponse{},
 		}
+		// initialize keyID
+		keyID := ""
+		probe.keyID.Store(&keyID)
+
+		go wait.PollImmediateUntilWithContext(
+			ctx,
+			time.Minute,
+			func(ctx context.Context) (bool, error) {
+				if err := probe.check(ctx); err != nil {
+					klog.V(2).Infof("PollImmediateUntilWithContext calling probe check() err: %v", err)
+				}
+				return false, nil
+			})
 
 		// using AES-GCM by default for encrypting data with KMSv2
 		transformer := value.PrefixTransformer{
-			Transformer: envelopekmsv2.NewEnvelopeTransformer(envelopeService, int(*config.CacheSize), aestransformer.NewGCMTransformer),
+			Transformer: envelopekmsv2.NewEnvelopeTransformer(envelopeService, envelopekmsv2.KeyIDGetterFunc(probe.getCurrentKeyID), int(*config.CacheSize), aestransformer.NewGCMTransformer),
 			Prefix:      []byte(kmsTransformerPrefixV2 + kmsName + ":"),
 		}
 

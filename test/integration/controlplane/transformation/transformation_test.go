@@ -81,6 +81,7 @@ type transformTest struct {
 	restClient        *kubernetes.Clientset
 	ns                *corev1.Namespace
 	secret            *corev1.Secret
+	pod               *unstructured.Unstructured
 }
 
 func newTransformTest(l kubeapiservertesting.Logger, transformerConfigYAML string, reload bool, configDir string, ecSymLink bool) (*transformTest, error) {
@@ -368,6 +369,10 @@ func createResource(client dynamic.Interface, gvr schema.GroupVersionResource, n
 	return client.Resource(gvr).Namespace(ns).Create(context.TODO(), stubObj, metav1.CreateOptions{})
 }
 
+func inplaceUpdateResource(client dynamic.Interface, gvr schema.GroupVersionResource, ns string, obj *unstructured.Unstructured) (*unstructured.Unstructured, error) {
+	return client.Resource(gvr).Namespace(ns).Update(context.TODO(), obj, metav1.UpdateOptions{})
+}
+
 func getStubObj(gvr schema.GroupVersionResource) (*unstructured.Unstructured, error) {
 	stub := ""
 	if data, ok := etcd.GetEtcdStorageDataForNamespace(testNamespace)[gvr]; ok {
@@ -387,6 +392,15 @@ func getStubObj(gvr schema.GroupVersionResource) (*unstructured.Unstructured, er
 func (e *transformTest) createPod(namespace string, dynamicInterface dynamic.Interface) (*unstructured.Unstructured, error) {
 	podGVR := gvr("", "v1", "pods")
 	pod, err := createResource(dynamicInterface, podGVR, namespace)
+	if err != nil {
+		return nil, fmt.Errorf("error while writing pod: %v", err)
+	}
+	return pod, nil
+}
+
+func (e *transformTest) inplaceUpdatePod(namespace string, obj *unstructured.Unstructured, dynamicInterface dynamic.Interface) (*unstructured.Unstructured, error) {
+	podGVR := gvr("", "v1", "pods")
+	pod, err := inplaceUpdateResource(dynamicInterface, podGVR, namespace, obj)
 	if err != nil {
 		return nil, fmt.Errorf("error while writing pod: %v", err)
 	}

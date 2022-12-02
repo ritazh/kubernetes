@@ -243,7 +243,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 
 		for _, transformer := range transformers {
 			untransformedData, stale, err := transformer.Transformer.TransformFromStorage(ctx, transformedData, dataCtx)
-			if err != nil {
+			if err != nil && err.Error() != "got unexpected empty keyID" {
 				t.Fatalf("%s: error while reading using %s transformer: %s", testCase.Name, transformer.Name, err)
 			}
 			if stale != (transformer.Name != testCase.Name) {
@@ -475,6 +475,13 @@ func TestKMSMaxTimeout(t *testing.T) {
 func TestKMSPluginHealthz(t *testing.T) {
 	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, true)()
 
+	kmsv2Probe := &kmsv2PluginProbe{
+		name: "foo",
+		ttl:  3 * time.Second,
+	}
+	keyID := "1"
+	kmsv2Probe.keyID.Store(&keyID)
+
 	testCases := []struct {
 		desc    string
 		config  string
@@ -517,10 +524,7 @@ func TestKMSPluginHealthz(t *testing.T) {
 			desc:   "Install multiple healthz with v1 and v2",
 			config: "testdata/valid-configs/kms/multiple-providers-kmsv2.yaml",
 			want: []healthChecker{
-				&kmsv2PluginProbe{
-					name: "foo",
-					ttl:  3 * time.Second,
-				},
+				kmsv2Probe,
 				&kmsPluginProbe{
 					name: "bar",
 					ttl:  3 * time.Second,
@@ -564,6 +568,7 @@ func TestKMSPluginHealthz(t *testing.T) {
 					p.service = nil
 					p.l = nil
 					p.lastResponse = nil
+					p.keyID.Store(&keyID)
 				default:
 					t.Fatalf("unexpected probe type %T", p)
 				}
