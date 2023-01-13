@@ -81,7 +81,6 @@ type transformTest struct {
 	restClient        *kubernetes.Clientset
 	ns                *corev1.Namespace
 	secret            *corev1.Secret
-	pod               *unstructured.Unstructured
 }
 
 func newTransformTest(l kubeapiservertesting.Logger, transformerConfigYAML string, reload bool, configDir string, ecSymLink bool) (*transformTest, error) {

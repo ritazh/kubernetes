@@ -28,6 +28,7 @@ import (
 	"github.com/google/go-cmp/cmp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/wait"
 	apiserverconfig "k8s.io/apiserver/pkg/apis/config"
 	"k8s.io/apiserver/pkg/features"
 	"k8s.io/apiserver/pkg/storage/value"
@@ -243,7 +244,7 @@ func TestEncryptionProviderConfigCorrect(t *testing.T) {
 
 		for _, transformer := range transformers {
 			untransformedData, stale, err := transformer.Transformer.TransformFromStorage(ctx, transformedData, dataCtx)
-			if err != nil && err.Error() != "got unexpected empty keyID" {
+			if err != nil {
 				t.Fatalf("%s: error while reading using %s transformer: %s", testCase.Name, transformer.Name, err)
 			}
 			if stale != (transformer.Name != testCase.Name) {
@@ -551,7 +552,9 @@ func TestKMSPluginHealthz(t *testing.T) {
 				return
 			}
 
-			_, got, kmsUsed, err := getTransformerOverridesAndKMSPluginProbes(config, testContext(t).Done())
+			ctx, cancel := context.WithCancel(context.Background())
+			cancel() // cancel this upfront so the kms v2 healthz check poll only runs once
+			_, got, kmsUsed, err := getTransformerOverridesAndKMSPluginProbes(config, ctx.Done())
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -565,10 +568,11 @@ func TestKMSPluginHealthz(t *testing.T) {
 					p.l = nil
 					p.lastResponse = nil
 				case *kmsv2PluginProbe:
+					waitForOneKMSv2Check(t, p) // make sure the kms v2 healthz check poll is done
 					p.service = nil
 					p.l = nil
 					p.lastResponse = nil
-					p.keyID.Store(&keyID)
+					p.keyID = kmsv2Probe.keyID
 				default:
 					t.Fatalf("unexpected probe type %T", p)
 				}
@@ -592,6 +596,18 @@ func TestKMSPluginHealthz(t *testing.T) {
 				t.Fatalf("HealthzConfig mismatch (-want +got):\n%s", d)
 			}
 		})
+	}
+}
+
+func waitForOneKMSv2Check(t *testing.T, p *kmsv2PluginProbe) {
+	t.Helper()
+
+	if err := wait.PollImmediate(100*time.Millisecond, wait.ForeverTestTimeout, func() (done bool, err error) {
+		p.l.Lock()
+		defer p.l.Unlock()
+		return !p.lastResponse.received.IsZero(), nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 

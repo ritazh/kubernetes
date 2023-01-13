@@ -24,7 +24,6 @@ import (
 	"context"
 	"crypto/aes"
 	"fmt"
-
 	"strings"
 	"testing"
 	"time"
@@ -37,17 +36,15 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/uuid"
+	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/features"
-
 	"k8s.io/apiserver/pkg/server/options/encryptionconfig"
 	"k8s.io/apiserver/pkg/storage/value"
 	aestransformer "k8s.io/apiserver/pkg/storage/value/encrypt/aes"
-
 	"k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2"
 	kmstypes "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/kmsv2/v2alpha1"
 	kmsv2mock "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/testing/v2alpha1"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-
 	"k8s.io/client-go/dynamic"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	kmsv2api "k8s.io/kms/apis/v2alpha1"
@@ -213,9 +210,12 @@ resources:
 }
 
 // TestKMSv2ProviderKeyIDStaleness is an integration test between KubeAPI and KMSv2 Plugin
-// Concretely, this test verifies the following integration contracts:
-// 1. A no-op update on a single item and when the key IDs are the same the resource version should not change
-// 2. When key ID changes the resource version changes (but only once)
+// Concretely, this test verifies the following contracts for no-op updates:
+// 1. When the key ID is unchanged, the resource version must not change
+// 2. When the key ID changes, the resource version changes (but only once)
+// 3. For all subsequent updates, the resource version must not change
+// 4. When kms-plugin is down, expect creation of new pod and encryption to fail
+// 5. when kms-plugin is down, no-op update for a pod should succeed and not result in RV change
 func TestKMSv2ProviderKeyIDStaleness(t *testing.T) {
 	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, true)()
 
@@ -249,36 +249,45 @@ resources:
 	}
 	defer test.cleanUp()
 
-	test.pod, err = test.createPod(testNamespace, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
+	testPod, err := test.createPod(testNamespace, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
 	if err != nil {
 		t.Fatalf("Failed to create test pod, error: %v, ns: %s", err, testNamespace)
 	}
-	version1 := test.pod.GetResourceVersion()
+	version1 := testPod.GetResourceVersion()
 
 	// 1. no-op update for the test pod should not result in any RV change
-	updatedPod, err := test.inplaceUpdatePod(testNamespace, test.pod, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
+	updatedPod, err := test.inplaceUpdatePod(testNamespace, testPod, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
 	if err != nil {
 		t.Fatalf("Failed to update test pod, error: %v, ns: %s", err, testNamespace)
 	}
 	version2 := updatedPod.GetResourceVersion()
 	if version1 != version2 {
-		t.Fatalf("Resource version should not have changed. old pod: %v, new pod: %v", test.pod, updatedPod)
+		t.Fatalf("Resource version should not have changed. old pod: %v, new pod: %v", testPod, updatedPod)
 	}
 	// 2. no-op update for the test pod with keyID update should result in RV change
 	pluginMock.UpdateKeyID()
 	if err := kmsv2mock.WaitForBase64PluginToBeUpdated(pluginMock); err != nil {
 		t.Fatalf("Failed to update keyID for plugin, err: %v", err)
 	}
-	// Wait 1 minute (poll interval to call kmsv2PluginProbe check) to update keyID
-	time.Sleep(time.Minute)
-	updatedPod, err = test.inplaceUpdatePod(testNamespace, updatedPod, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
-	if err != nil {
-		t.Fatalf("Failed to update test pod, error: %v, ns: %s", err, testNamespace)
-	}
-	version3 := updatedPod.GetResourceVersion()
+	// Wait 1 sec (poll interval to check resource version) until a resource version change is detected or timeout at 1 minute.
+
+	version3 := ""
+	wait.Poll(time.Second, time.Minute,
+		func() (bool, error) {
+			updatedPod, err = test.inplaceUpdatePod(testNamespace, updatedPod, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
+			if err != nil {
+				t.Fatalf("Failed to update test pod, error: %v, ns: %s", err, testNamespace)
+			}
+			version3 = updatedPod.GetResourceVersion()
+			if version1 != version3 {
+				return true, nil
+			}
+			return false, nil
+		})
 	if version1 == version3 {
-		t.Fatalf("Resource version should have changed after keyID update. old pod: %v, new pod: %v", test.pod, updatedPod)
+		t.Fatalf("Resource version should have changed after keyID update. old pod: %v, new pod: %v", testPod, updatedPod)
 	}
+
 	// 3. no-op update for the updated pod should not result in RV change
 	updatedPod, err = test.inplaceUpdatePod(testNamespace, updatedPod, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
 	if err != nil {
@@ -286,7 +295,28 @@ resources:
 	}
 	version4 := updatedPod.GetResourceVersion()
 	if version3 != version4 {
-		t.Fatalf("Resource version should not have changed again after the initial version updated as a result of the keyID update. old pod: %v, new pod: %v", test.pod, updatedPod)
+		t.Fatalf("Resource version should not have changed again after the initial version updated as a result of the keyID update. old pod: %v, new pod: %v", testPod, updatedPod)
+	}
+
+	// 4. when kms-plugin is down, expect creation of new pod and encryption to fail
+	pluginMock.EnterFailedState()
+	mustBeUnHealthy(t, "/kms-providers",
+		"internal server error: kms-provider-0: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
+		test.kubeAPIServer.ClientConfig)
+
+	_, err = test.createPod(testNamespace, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
+	if !strings.Contains(err.Error(), "failed to encrypt") {
+		t.Fatalf("Create test pod should have failed due to encryption, ns: %s", testNamespace)
+	}
+
+	// 5. when kms-plugin is down, no-op update for a pod should succeed and not result in RV change
+	updatedPod, err = test.inplaceUpdatePod(testNamespace, updatedPod, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
+	if err != nil {
+		t.Fatalf("Failed to perform no-op update on pod when kms-plugin is down, error: %v, ns: %s", err, testNamespace)
+	}
+	version5 := updatedPod.GetResourceVersion()
+	if version3 != version5 {
+		t.Fatalf("Resource version should not have changed again after the initial version updated as a result of the keyID update. old pod: %v, new pod: %v", testPod, updatedPod)
 	}
 }
 

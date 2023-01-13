@@ -157,16 +157,18 @@ func (t *envelopeTransformer) TransformFromStorage(ctx context.Context, data []b
 	if err != nil {
 		return nil, false, err
 	}
+	if stale {
+		return out, stale, nil
+	}
 
 	// Check keyID freshness in addition to data staleness
 	keyID := ""
-	if !stale {
-		keyID, err = t.keyIDGetter(ctx)
-		if err != nil {
-			return nil, false, err
-		}
-		stale = encryptedObject.KeyID != keyID
+	keyID, err = t.keyIDGetter(ctx)
+	if err != nil {
+		return nil, false, err
 	}
+	stale = encryptedObject.KeyID != keyID
+
 	return out, stale, nil
 }
 
@@ -205,7 +207,7 @@ func (t *envelopeTransformer) TransformToStorage(ctx context.Context, data []byt
 	// Check keyID freshness and write to log if key IDs are different
 	statusKeyID, err := t.keyIDGetter(ctx)
 	if err == nil && encObject.KeyID != statusKeyID {
-		klog.V(2).InfoS("saw different key IDs when encryptiong content using kms v2 envelope service", "uid", uid, "encObject.KeyID", encObject.KeyID, "statusKeyID", statusKeyID)
+		klog.V(2).InfoS("observed different key IDs when encrypting content using kms v2 envelope service", "uid", uid, "encObject.KeyID", encObject.KeyID, "statusKeyID", statusKeyID)
 	}
 
 	// Serialize the EncryptedObject to a byte array.
@@ -286,7 +288,7 @@ func validateEncryptedObject(o *kmstypes.EncryptedObject) error {
 	if err := validateEncryptedDEK(o.EncryptedDEK); err != nil {
 		return fmt.Errorf("failed to validate encrypted DEK: %w", err)
 	}
-	if err := validateKeyID(o.KeyID); err != nil {
+	if err := ValidateKeyID(o.KeyID); err != nil {
 		return fmt.Errorf("failed to validate key id: %w", err)
 	}
 	if err := validateAnnotations(o.Annotations); err != nil {
@@ -326,10 +328,10 @@ func validateAnnotations(annotations map[string][]byte) error {
 	return utilerrors.NewAggregate(errs)
 }
 
-// validateKeyID tests the following:
+// ValidateKeyID tests the following:
 // 1. The keyID is not empty.
 // 2. The size of keyID is less than 1 kB.
-func validateKeyID(keyID string) error {
+func ValidateKeyID(keyID string) error {
 	if len(keyID) == 0 {
 		return fmt.Errorf("keyID is empty")
 	}

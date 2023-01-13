@@ -98,12 +98,12 @@ func WaitForBase64PluginToBeUpdated(plugin *Base64Plugin) error {
 
 	updatePollErr := wait.PollImmediate(1*time.Second, wait.ForeverTestTimeout, func() (bool, error) {
 		resp, gRPCErr = plugin.Status(context.Background(), &kmsapi.StatusRequest{})
-		klog.Infof("WaitForBase64PluginToBeUpdated: %s", resp.KeyId)
+		klog.InfoS("WaitForBase64PluginToBeUpdated", "keyID", resp.KeyId)
 		return gRPCErr == nil && resp.Healthz == "ok" && resp.KeyId == "2", nil
 	})
 
-	if updatePollErr == wait.ErrWaitTimeout {
-		return fmt.Errorf("failed to update KeyID for kms-plugin, error: %v", gRPCErr)
+	if updatePollErr != nil {
+		return fmt.Errorf("failed to update keyID for kmsv2-plugin, error: %w", gRPCErr)
 	}
 
 	return nil

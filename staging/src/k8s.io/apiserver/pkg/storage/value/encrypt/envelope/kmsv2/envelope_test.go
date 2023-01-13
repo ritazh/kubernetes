@@ -214,7 +214,7 @@ func TestEnvelopeCacheLimit(t *testing.T) {
 	}
 }
 
-// Test keyIDGetter as part of envelopeTransformer.
+// Test keyIDGetter as part of envelopeTransformer, throws error if returned err or staleness is incorrect.
 func TestEnvelopeTransformerKeyIDGetter(t *testing.T) {
 	t.Parallel()
 	testCases := []struct {
@@ -244,7 +244,9 @@ func TestEnvelopeTransformerKeyIDGetter(t *testing.T) {
 	}
 
 	for _, tt := range testCases {
+		tt := tt
 		t.Run(tt.desc, func(t *testing.T) {
+			t.Parallel()
 			envelopeService := newTestEnvelopeService()
 			envelopeTransformer := NewEnvelopeTransformer(envelopeService,
 				func(ctx context.Context) (string, error) {
@@ -262,12 +264,20 @@ func TestEnvelopeTransformerKeyIDGetter(t *testing.T) {
 			}
 
 			_, stale, err := envelopeTransformer.TransformFromStorage(ctx, transformedData, dataCtx)
-			if tt.testErr == nil && err != nil {
-				t.Fatalf("envelopeTransformer: error while transforming data (%v) from storage: %s", transformedData, err)
-			}
-
-			if stale != tt.expectedStale {
-				t.Fatalf("envelopeTransformer TransformFromStorage determined keyID staleness incorrectly, Expected: %v, got %v", tt.expectedStale, stale)
+			if tt.testErr != nil {
+				if err == nil {
+					t.Fatalf("envelopeTransformer: expected error: %v, got nil", tt.testErr)
+				}
+				if err.Error() != tt.testErr.Error() {
+					t.Fatalf("envelopeTransformer: expected error: %v, got: %v", tt.testErr, err)
+				}
+			} else {
+				if err != nil {
+					t.Fatalf("envelopeTransformer: unexpected error: %v", err)
+				}
+				if stale != tt.expectedStale {
+					t.Fatalf("envelopeTransformer TransformFromStorage determined keyID staleness incorrectly, expected: %v, got %v", tt.expectedStale, stale)
+				}
 			}
 		})
 	}
@@ -517,7 +527,7 @@ func TestValidateKeyID(t *testing.T) {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			err := validateKeyID(tt.keyID)
+			err := ValidateKeyID(tt.keyID)
 			if tt.expectedError != "" {
 				if err == nil {
 					t.Fatalf("expected error %q, got nil", tt.expectedError)

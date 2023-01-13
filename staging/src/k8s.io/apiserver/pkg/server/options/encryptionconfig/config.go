@@ -49,7 +49,6 @@ import (
 	"k8s.io/apiserver/pkg/storage/value/encrypt/identity"
 	"k8s.io/apiserver/pkg/storage/value/encrypt/secretbox"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-
 	"k8s.io/klog/v2"
 )
 
@@ -265,7 +264,8 @@ func (h *kmsv2PluginProbe) check(ctx context.Context) error {
 		h.ttl = kmsPluginHealthzNegativeTTL
 		return fmt.Errorf("failed to perform status section of the healthz check for KMS Provider %s, error: %w", h.name, err)
 	}
-	if len(p.KeyID) > 0 {
+	// we coast on the last valid key ID that we have observed
+	if err := envelopekmsv2.ValidateKeyID(p.KeyID); err == nil {
 		h.keyID.Store(&p.KeyID)
 	}
 
@@ -280,7 +280,7 @@ func (h *kmsv2PluginProbe) check(ctx context.Context) error {
 	return nil
 }
 
-// getCurrentKeyID returns the latest keyID from the Status() method or err if keyID is empty
+// getCurrentKeyID returns the latest keyID from the last Status() call or err if keyID is empty
 func (h *kmsv2PluginProbe) getCurrentKeyID(ctx context.Context) (string, error) {
 	keyID := *h.keyID.Load()
 	if len(keyID) == 0 {
@@ -298,7 +298,7 @@ func isKMSv2ProviderHealthy(name string, response *envelopekmsv2.StatusResponse)
 	if response.Version != envelopekmsv2.KMSAPIVersion {
 		errs = append(errs, fmt.Errorf("expected KMSv2 API version %s, got %s", envelopekmsv2.KMSAPIVersion, response.Version))
 	}
-	if len(response.KeyID) == 0 {
+	if err := envelopekmsv2.ValidateKeyID(response.KeyID); err != nil {
 		errs = append(errs, fmt.Errorf("expected KMSv2 KeyID to be set, got %s", response.KeyID))
 	}
 
@@ -557,23 +557,24 @@ func kmsPrefixTransformer(config *apiserverconfig.KMSConfiguration, stopCh <-cha
 			l:            &sync.Mutex{},
 			lastResponse: &kmsPluginHealthzResponse{},
 		}
-		// initialize keyID
+		// initialize keyID so that Load always works
 		keyID := ""
 		probe.keyID.Store(&keyID)
 
+		// make sure that the plugin's key ID is reasonably up-to-date
 		go wait.PollImmediateUntilWithContext(
 			ctx,
 			time.Minute,
 			func(ctx context.Context) (bool, error) {
 				if err := probe.check(ctx); err != nil {
-					klog.V(2).Infof("PollImmediateUntilWithContext calling probe check() err: %v", err)
+					klog.V(2).ErrorS(err, "kms plugin failed health check probe", "name", kmsName)
 				}
 				return false, nil
 			})
 
 		// using AES-GCM by default for encrypting data with KMSv2
 		transformer := value.PrefixTransformer{
-			Transformer: envelopekmsv2.NewEnvelopeTransformer(envelopeService, envelopekmsv2.KeyIDGetterFunc(probe.getCurrentKeyID), int(*config.CacheSize), aestransformer.NewGCMTransformer),
+			Transformer: envelopekmsv2.NewEnvelopeTransformer(envelopeService, probe.getCurrentKeyID, int(*config.CacheSize), aestransformer.NewGCMTransformer),
 			Prefix:      []byte(kmsTransformerPrefixV2 + kmsName + ":"),
 		}
 
