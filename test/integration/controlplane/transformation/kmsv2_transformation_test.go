@@ -113,8 +113,6 @@ func (r envelopekmsv2) plainTextPayload(secretETCDPath string) ([]byte, error) {
 // 4. The cipherTextPayload (ex. Secret) should be encrypted via AES GCM transform
 // 5. kmstypes.EncryptedObject structure should be serialized and deposited in ETCD
 func TestKMSv2Provider(t *testing.T) {
-	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, true)()
-
 	encryptionConfig := `
 kind: EncryptionConfiguration
 apiVersion: apiserver.config.k8s.io/v1
@@ -127,6 +125,20 @@ resources:
        name: kms-provider
        endpoint: unix:///@kms-provider.sock
 `
+	encryptionConfig1 := `
+kind: EncryptionConfiguration
+apiVersion: apiserver.config.k8s.io/v1
+resources:
+  - resources:
+    - secrets
+    providers:
+    - aescbc:
+        keys:
+        - name: key1
+          secret: c2VjcmV0IGlzIHNlY3VyZQ==
+`
+
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, true)()
 
 	providerName := "kms-provider"
 	pluginMock, err := kmsv2mock.NewBase64Plugin("@kms-provider.sock")
@@ -140,11 +152,16 @@ resources:
 	}
 	defer pluginMock.CleanUp()
 
-	test, err := newTransformTest(t, encryptionConfig, false, "")
+	test, err := newTransformTest(t, encryptionConfig, true, "", nil)
 	if err != nil {
 		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
 	}
-	defer test.cleanUp()
+	restarted := 0
+	defer func() {
+		if restarted == 0 {
+			test.cleanUp()
+		}
+	}()
 
 	test.secret, err = test.createSecret(testSecret, testNamespace)
 	if err != nil {
@@ -206,6 +223,88 @@ resources:
 	if secretVal != string(s.Data[secretKey]) {
 		t.Fatalf("expected %s from KubeAPI, but got %s", secretVal, string(s.Data[secretKey]))
 	}
+
+	test.shutdownAPIServer(true)
+
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, false)()
+
+	// //provider1Name := "kms-provider1"
+	// pluginMock1, err := kmsv2mock.NewBase64Plugin("@kms-provider1.sock")
+	// if err != nil {
+	// 	t.Fatalf("failed to create mock1 of KMSv2 Plugin: %v", err)
+	// }
+
+	// go pluginMock1.Start()
+	// if err := kmsv2mock.WaitForBase64PluginToBeUp(pluginMock1); err != nil {
+	// 	t.Fatalf("Failed start plugin1, err: %v", err)
+	// }
+	// defer pluginMock1.CleanUp()
+
+	test, err = newTransformTest(t, encryptionConfig1, true, "", test)
+	if err != nil {
+		t.Fatalf("failed to start KUBE API Server with encryptionConfig1\n %s, error: %v", encryptionConfig1, err)
+	}
+	restarted = 1
+	defer func() {
+		if restarted == 1 {
+			test.cleanUp()
+		}
+	}()
+
+	_, err = test.createSecret("test2", testNamespace)
+	if err != nil {
+		t.Fatalf("Failed to create test secret, error: %v", err)
+	}
+	test.runResource(t, unSealWithCBCTransformer, aesCBCPrefix, "", "v1", "secrets", "test2", testNamespace)
+
+	secretClient = test.restClient.CoreV1().Secrets(testNamespace)
+	// Getting an old secret that was encrypted by another plugin should fail
+	_, err = secretClient.Get(ctx, testSecret, metav1.GetOptions{})
+	if err == nil || !strings.Contains(err.Error(), "no matching prefix found") {
+		t.Fatalf("after disabling feature gate, get Secret %s from %s should return err containing: no matching prefix found. Got err: %v", testSecret, testNamespace, err)
+	}
+
+	test.shutdownAPIServer(true)
+
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.KMSv2, true)()
+
+	test, err = newTransformTest(t, encryptionConfig, true, "", test)
+	if err != nil {
+		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
+	}
+	restarted = 2
+	defer func() {
+		if restarted == 2 {
+			test.cleanUp()
+		}
+	}()
+
+	// Getting an old secret that was encrypted by the same plugin should not fail.
+	s, err = test.restClient.CoreV1().Secrets(testNamespace).Get(
+		context.TODO(),
+		testSecret,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("failed to read secret, err: %v", err)
+	}
+	if secretVal != string(s.Data[secretKey]) {
+		t.Fatalf("expected %s from KubeAPI, but got %s", secretVal, string(s.Data[secretKey]))
+	}
+	// _, err = test3.restClient.CoreV1().Secrets(testNamespace).Get(
+	// 	context.TODO(),
+	// 	"test2",
+	// 	metav1.GetOptions{},
+	// )
+	// if err != nil {
+	// 	t.Fatalf("failed to read test2 secret, err: %v", err)
+	// }
+	secretClient = test.restClient.CoreV1().Secrets(testNamespace)
+	// Getting an old secret that was encrypted by another plugin should fail
+	_, err = secretClient.Get(ctx, "test2", metav1.GetOptions{})
+	if err == nil || !strings.Contains(err.Error(), "no matching prefix found") {
+		t.Fatalf("after re-enabling feature gate, get test2 Secret from %s should return err containing: no matching prefix found. actual err: %v", testNamespace, err)
+	}
 }
 
 // TestKMSv2ProviderKeyIDStaleness is an integration test between KubeAPI and KMSv2 Plugin
@@ -241,7 +340,7 @@ resources:
 	}
 	defer pluginMock.CleanUp()
 
-	test, err := newTransformTest(t, encryptionConfig, false, "")
+	test, err := newTransformTest(t, encryptionConfig, false, "", nil)
 	if err != nil {
 		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
 	}
@@ -367,7 +466,7 @@ resources:
 		t.Fatalf("Failed to start KMS Plugin #2: err: %v", err)
 	}
 
-	test, err := newTransformTest(t, encryptionConfig, false, "")
+	test, err := newTransformTest(t, encryptionConfig, false, "", nil)
 	if err != nil {
 		t.Fatalf("Failed to start kube-apiserver, error: %v", err)
 	}
@@ -454,7 +553,7 @@ resources:
 	}
 	t.Cleanup(pluginMock.CleanUp)
 
-	test, err := newTransformTest(t, encryptionConfig, false, "")
+	test, err := newTransformTest(t, encryptionConfig, false, "", nil)
 	if err != nil {
 		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
 	}

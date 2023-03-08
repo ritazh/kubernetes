@@ -27,6 +27,8 @@ import (
 	apiserverconfigv1 "k8s.io/apiserver/pkg/apis/config/v1"
 	"k8s.io/apiserver/pkg/storage/value"
 	aestransformer "k8s.io/apiserver/pkg/storage/value/encrypt/aes"
+
+	"k8s.io/klog/v2"
 )
 
 const (
@@ -85,7 +87,7 @@ func TestSecretsShouldBeTransformed(t *testing.T) {
 		// TODO: add secretbox
 	}
 	for _, tt := range testCases {
-		test, err := newTransformTest(t, tt.transformerConfigContent, false, "")
+		test, err := newTransformTest(t, tt.transformerConfigContent, false, "", nil)
 		if err != nil {
 			test.cleanUp()
 			t.Errorf("failed to setup test for envelop %s, error was %v", tt.transformerPrefix, err)
@@ -120,7 +122,7 @@ func BenchmarkAESCBCEnvelopeWrite(b *testing.B) {
 
 func runBenchmark(b *testing.B, transformerConfig string) {
 	b.StopTimer()
-	test, err := newTransformTest(b, transformerConfig, false, "")
+	test, err := newTransformTest(b, transformerConfig, false, "", nil)
 	defer test.cleanUp()
 	if err != nil {
 		b.Fatalf("failed to setup benchmark for config %s, error was %v", transformerConfig, err)
@@ -153,6 +155,7 @@ func unSealWithGCMTransformer(ctx context.Context, cipherText []byte, dataCtx va
 func unSealWithCBCTransformer(ctx context.Context, cipherText []byte, dataCtx value.Context,
 	transformerConfig apiserverconfigv1.ProviderConfiguration) ([]byte, error) {
 
+	klog.Infof("RITA unSealWithCBCTransformer transformerConfig: %v", transformerConfig)
 	block, err := newAESCipher(transformerConfig.AESCBC.Keys[0].Secret)
 	if err != nil {
 		return nil, err

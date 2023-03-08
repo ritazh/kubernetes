@@ -132,7 +132,7 @@ resources:
 	}
 	defer pluginMock.CleanUp()
 
-	test, err := newTransformTest(t, encryptionConfig, false, "")
+	test, err := newTransformTest(t, encryptionConfig, false, "", nil)
 	if err != nil {
 		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
 	}
@@ -318,7 +318,7 @@ resources:
 	defer pluginMock.CleanUp()
 
 	var restarted bool
-	test, err := newTransformTest(t, encryptionConfig, true, "")
+	test, err := newTransformTest(t, encryptionConfig, true, "", nil)
 	if err != nil {
 		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
 	}
@@ -514,13 +514,23 @@ resources:
 
 	// restart kube-apiserver with last applied encryption config and assert that server can start
 	previousConfigDir := test.configDir
-	test.shutdownAPIServer()
+	test.shutdownAPIServer(true)
 	restarted = true
-	test, err = newTransformTest(t, "", true, previousConfigDir)
+	test, err = newTransformTest(t, "", true, previousConfigDir, test)
 	if err != nil {
 		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
 	}
 	defer test.cleanUp()
+
+	// confirm that reading secrets still works
+	_, err = test.restClient.CoreV1().Secrets(testNamespace).Get(
+		context.TODO(),
+		testSecret,
+		metav1.GetOptions{},
+	)
+	if err != nil {
+		t.Fatalf("failed to read secret, err: %v", err)
+	}
 
 	// confirm that reading cluster wide secrets still works after restart
 	if _, err = test.restClient.CoreV1().Secrets("").List(context.TODO(), metav1.ListOptions{}); err != nil {
@@ -528,7 +538,7 @@ resources:
 	}
 
 	// make sure cluster wide configmaps read still works
-	if _, err = test.restClient.CoreV1().ConfigMaps("").List(context.TODO(), metav1.ListOptions{}); err != nil {
+	if _, err = test.restClient.CoreV1().ConfigMaps("").List(context.TODO(), metav1.ListOptions{}); err == nil {
 		t.Fatalf("failed to list configmaps, err: %v", err)
 	}
 }
@@ -614,7 +624,7 @@ resources:
 			}
 			defer pluginMock.CleanUp()
 
-			test, err := newTransformTest(t, encryptionConfig, true, "")
+			test, err := newTransformTest(t, encryptionConfig, true, "", nil)
 			if err != nil {
 				test.cleanUp()
 				t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
@@ -811,7 +821,7 @@ resources:
 		t.Fatalf("Failed to start KMS Plugin #2: err: %v", err)
 	}
 
-	test, err := newTransformTest(t, encryptionConfig, false, "")
+	test, err := newTransformTest(t, encryptionConfig, false, "", nil)
 	if err != nil {
 		t.Fatalf("Failed to start kube-apiserver, error: %v", err)
 	}
@@ -889,7 +899,7 @@ resources:
 		t.Fatalf("Failed to start KMS Plugin #2: err: %v", err)
 	}
 
-	test, err := newTransformTest(t, encryptionConfig, true, "")
+	test, err := newTransformTest(t, encryptionConfig, true, "", nil)
 	if err != nil {
 		t.Fatalf("Failed to start kube-apiserver, error: %v", err)
 	}
