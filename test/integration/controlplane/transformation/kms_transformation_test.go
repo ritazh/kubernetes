@@ -178,11 +178,12 @@ resources:
 
 	plainSecret, err := envelopeData.plainTextPayload(secretETCDPath)
 	if err != nil {
-		t.Fatalf("failed to transform from storage via AESCBC, err: %v", err)
+		t.Fatalf("failed to transform from storage via AESGCM, err: %v", err)
 	}
-
-	if !strings.Contains(string(plainSecret), secretVal) {
-		t.Fatalf("expected %q after decryption, but got %q", secretVal, string(plainSecret))
+	///TODO: RITA why is this needed now?
+	encodedSecretVal := base64.StdEncoding.EncodeToString([]byte(secretVal))
+	if !strings.Contains(string(plainSecret), encodedSecretVal) {
+		t.Fatalf("expected %q after decryption, but got %q", encodedSecretVal, string(plainSecret))
 	}
 
 	secretClient := test.restClient.CoreV1().Secrets(testNamespace)
@@ -276,8 +277,10 @@ resources:
 	if err != nil {
 		t.Fatalf("failed to transform from storage via AESGCM, err: %v", err)
 	}
-	if !strings.Contains(string(oldPlainSecret), oldSecretVal) {
-		t.Fatalf("expected %q after decryption, but got %q", oldSecretVal, string(oldPlainSecret))
+	///TODO: RITA why is this needed now?
+	encodedOldSecretVal := base64.StdEncoding.EncodeToString([]byte(oldSecretVal))
+	if !strings.Contains(string(oldPlainSecret), encodedOldSecretVal) {
+		t.Fatalf("expected %q after decryption, but got %q", encodedOldSecretVal, string(oldPlainSecret))
 	}
 }
 
@@ -336,7 +339,7 @@ resources:
 	}
 
 	// test if hot reload controller is healthy
-	mustBeHealthy(t, "/poststarthook/start-encryption-provider-config-automatic-reload", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/poststarthook/start-encryption-provider-config-automatic-reload", "ok", test.apiServer.Config)
 
 	encryptionConfigWithNewProvider := `
 kind: EncryptionConfiguration
@@ -542,7 +545,7 @@ resources:
 			t.Fatal(err)
 		}
 		resources := etcd.GetResources(t, serverResources)
-		client := dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig)
+		client := dynamic.NewForConfigOrDie(test.apiServer.Config)
 
 		etcdStorageData := etcd.GetEtcdStorageDataForNamespace(testNamespace)
 		for _, resource := range resources {
@@ -570,7 +573,7 @@ resources:
 			}
 		}
 
-		rawClient, etcdClient, err := integration.GetEtcdClients(test.kubeAPIServer.ServerOpts.Etcd.StorageConfig.Transport)
+		rawClient, etcdClient, err := integration.GetEtcdClients(test.storageConfig.Transport)
 		if err != nil {
 			t.Fatalf("failed to create etcd client: %v", err)
 		}
@@ -578,7 +581,7 @@ resources:
 		// close the client (which we can do by closing rawClient).
 		defer rawClient.Close()
 
-		response, err := etcdClient.Get(context.TODO(), "/"+test.kubeAPIServer.ServerOpts.Etcd.StorageConfig.Prefix, clientv3.WithPrefix())
+		response, err := etcdClient.Get(context.TODO(), "/"+test.storageConfig.Prefix, clientv3.WithPrefix())
 		if err != nil {
 			t.Fatalf("failed to retrieve secret from etcd %v", err)
 		}
@@ -797,7 +800,7 @@ resources:
 			}
 
 			// test if hot reload controller is healthy
-			mustBeHealthy(t, "/poststarthook/start-encryption-provider-config-automatic-reload", "ok", test.kubeAPIServer.ClientConfig)
+			mustBeHealthy(t, "/poststarthook/start-encryption-provider-config-automatic-reload", "ok", test.apiServer.Config)
 
 			encryptionConfigWithNewProvider := `
 kind: EncryptionConfiguration
@@ -959,31 +962,31 @@ resources:
 
 	// Stage 1 - Since all kms-plugins are guaranteed to be up, healthz checks for:
 	// healthz/kms-provider-0 and /healthz/kms-provider-1 should be OK.
-	mustBeHealthy(t, "/kms-provider-0", "ok", test.kubeAPIServer.ClientConfig)
-	mustBeHealthy(t, "/kms-provider-1", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/kms-provider-0", "ok", test.apiServer.Config)
+	mustBeHealthy(t, "/kms-provider-1", "ok", test.apiServer.Config)
 
 	// Stage 2 - kms-plugin for provider-1 is down. Therefore, expect the healthz check
 	// to fail and report that provider-1 is down
 	pluginMock1.EnterFailedState()
 	mustBeUnHealthy(t, "/kms-provider-0",
 		"internal server error: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
-		test.kubeAPIServer.ClientConfig)
-	mustBeHealthy(t, "/kms-provider-1", "ok", test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
+	mustBeHealthy(t, "/kms-provider-1", "ok", test.apiServer.Config)
 	pluginMock1.ExitFailedState()
 
 	// Stage 3 - kms-plugin for provider-1 is now up. Therefore, expect the health check for provider-1
 	// to succeed now, but provider-2 is now down.
 	pluginMock2.EnterFailedState()
-	mustBeHealthy(t, "/kms-provider-0", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/kms-provider-0", "ok", test.apiServer.Config)
 	mustBeUnHealthy(t, "/kms-provider-1",
 		"internal server error: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
-		test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
 	pluginMock2.ExitFailedState()
 
 	// Stage 4 - All kms-plugins are once again up,
 	// the healthz check should be OK.
-	mustBeHealthy(t, "/kms-provider-0", "ok", test.kubeAPIServer.ClientConfig)
-	mustBeHealthy(t, "/kms-provider-1", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/kms-provider-0", "ok", test.apiServer.Config)
+	mustBeHealthy(t, "/kms-provider-1", "ok", test.apiServer.Config)
 }
 
 func TestKMSHealthzWithReload(t *testing.T) {
@@ -1015,14 +1018,14 @@ resources:
 
 	// Stage 1 - Since all kms-plugins are guaranteed to be up,
 	// the healthz check should be OK.
-	mustBeHealthy(t, "/kms-providers", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/kms-providers", "ok", test.apiServer.Config)
 
 	// Stage 2 - kms-plugin for provider-1 is down. Therefore, expect the healthz check
 	// to fail and report that provider-1 is down
 	pluginMock1.EnterFailedState()
 	mustBeUnHealthy(t, "/kms-providers",
 		"internal server error: kms-provider-0: failed to perform encrypt section of the healthz check for KMS Provider provider-1, error: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
-		test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
 	pluginMock1.ExitFailedState()
 
 	// Stage 3 - kms-plugin for provider-1 is now up. Therefore, expect the health check for provider-1
@@ -1030,10 +1033,10 @@ resources:
 	pluginMock2.EnterFailedState()
 	mustBeUnHealthy(t, "/kms-providers",
 		"internal server error: kms-provider-1: failed to perform encrypt section of the healthz check for KMS Provider provider-2, error: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
-		test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
 	pluginMock2.ExitFailedState()
 
 	// Stage 4 - All kms-plugins are once again up,
 	// the healthz check should be OK.
-	mustBeHealthy(t, "/kms-providers", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/kms-providers", "ok", test.apiServer.Config)
 }

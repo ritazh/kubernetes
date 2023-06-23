@@ -23,6 +23,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/aes"
+	"encoding/base64"
 	"encoding/binary"
 	"fmt"
 	"strings"
@@ -33,7 +34,6 @@ import (
 	clientv3 "go.etcd.io/etcd/client/v3"
 
 	corev1 "k8s.io/api/core/v1"
-	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -50,7 +50,6 @@ import (
 	kmsv2mock "k8s.io/apiserver/pkg/storage/value/encrypt/envelope/testing/v2"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/dynamic"
-	"k8s.io/client-go/kubernetes"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	kmsv2api "k8s.io/kms/apis/v2"
 	kmsv2svc "k8s.io/kms/pkg/service"
@@ -193,9 +192,10 @@ resources:
 	if err != nil {
 		t.Fatalf("failed to transform from storage via AESGCM, err: %v", err)
 	}
-
-	if !strings.Contains(string(plainSecret), secretVal) {
-		t.Fatalf("expected %q after decryption, but got %q", secretVal, string(plainSecret))
+	///TODO: RITA why is this needed now?
+	encodedSecretVal := base64.StdEncoding.EncodeToString([]byte(secretVal))
+	if !strings.Contains(string(plainSecret), encodedSecretVal) {
+		t.Fatalf("expected %q after decryption, but got %q", encodedSecretVal, string(plainSecret))
 	}
 
 	secretClient := test.restClient.CoreV1().Secrets(testNamespace)
@@ -241,7 +241,7 @@ resources:
 	}
 	defer test.cleanUp()
 
-	dynamicClient := dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig)
+	dynamicClient := dynamic.NewForConfigOrDie(test.apiServer.Config)
 
 	testPod, err := test.createPod(testNamespace, dynamicClient)
 	if err != nil {
@@ -263,7 +263,7 @@ resources:
 	t.Cleanup(cancel)
 
 	var firstEncryptedDEK []byte
-	assertPodDEKs(ctx, t, test.kubeAPIServer.ServerOpts.Etcd.StorageConfig,
+	assertPodDEKs(ctx, t, *test.storageConfig,
 		1, 1,
 		"k8s:enc:kms:v2:kms-provider:",
 		func(_ int, counter uint64, etcdKey string, obj kmstypes.EncryptedObject) {
@@ -352,7 +352,7 @@ resources:
 	pluginMock.EnterFailedState()
 	mustBeUnHealthy(t, "/kms-providers",
 		"internal server error: kms-provider-0: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
-		test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
 
 	newPod, err := test.createPod(testNamespace, dynamicClient)
 	if err != nil {
@@ -392,7 +392,7 @@ resources:
 		t.Fatalf("Resource version should not have changed again after the initial version updated as a result of the keyID update. old pod: %v, new pod: %v", newPod, updatedNewPod)
 	}
 
-	assertPodDEKs(ctx, t, test.kubeAPIServer.ServerOpts.Etcd.StorageConfig,
+	assertPodDEKs(ctx, t, *test.storageConfig,
 		1, 1, "k8s:enc:kms:v2:kms-provider:", checkDEK,
 	)
 }
@@ -423,12 +423,10 @@ resources:
 	}
 	t.Cleanup(test.cleanUp)
 
-	client := kubernetes.NewForConfigOrDie(test.kubeAPIServer.ClientConfig)
-
 	const podCount = 1_000
 
 	for i := 0; i < podCount; i++ {
-		if _, err := client.CoreV1().Pods(testNamespace).Create(ctx, &corev1.Pod{
+		if _, err := test.restClient.CoreV1().Pods(testNamespace).Create(ctx, &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: fmt.Sprintf("dek-reuse-%04d", i+1), // making creation order match returned list order / nonce counter
 			},
@@ -445,7 +443,7 @@ resources:
 		}
 	}
 
-	assertPodDEKs(ctx, t, test.kubeAPIServer.ServerOpts.Etcd.StorageConfig,
+	assertPodDEKs(ctx, t, *test.storageConfig,
 		podCount, 1, // key ID does not change during the test so we should only have a single DEK
 		"k8s:enc:kms:v2:kms-provider:",
 		func(i int, counter uint64, etcdKey string, obj kmstypes.EncryptedObject) {
@@ -543,14 +541,14 @@ resources:
 
 	// Stage 1 - Since all kms-plugins are guaranteed to be up,
 	// the healthz check should be OK.
-	mustBeHealthy(t, "/kms-providers", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/kms-providers", "ok", test.apiServer.Config)
 
 	// Stage 2 - kms-plugin for provider-1 is down. Therefore, expect the healthz check
 	// to fail and report that provider-1 is down
 	pluginMock1.EnterFailedState()
 	mustBeUnHealthy(t, "/kms-providers",
 		"internal server error: kms-provider-0: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
-		test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
 	pluginMock1.ExitFailedState()
 
 	// Stage 3 - kms-plugin for provider-1 is now up. Therefore, expect the health check for provider-1
@@ -558,12 +556,12 @@ resources:
 	pluginMock2.EnterFailedState()
 	mustBeUnHealthy(t, "/kms-providers",
 		"internal server error: kms-provider-1: rpc error: code = FailedPrecondition desc = failed precondition - key disabled",
-		test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
 	pluginMock2.ExitFailedState()
 
 	// Stage 4 - All kms-plugins are once again up,
 	// the healthz check should be OK.
-	mustBeHealthy(t, "/kms-providers", "ok", test.kubeAPIServer.ClientConfig)
+	mustBeHealthy(t, "/kms-providers", "ok", test.apiServer.Config)
 
 	// Stage 5 - All kms-plugins are unhealthy at the same time and we can observe both failures.
 	pluginMock1.EnterFailedState()
@@ -572,7 +570,7 @@ resources:
 		"internal server error: "+
 			"[kms-provider-0: failed to perform status section of the healthz check for KMS Provider provider-1, error: rpc error: code = FailedPrecondition desc = failed precondition - key disabled,"+
 			" kms-provider-1: failed to perform status section of the healthz check for KMS Provider provider-2, error: rpc error: code = FailedPrecondition desc = failed precondition - key disabled]",
-		test.kubeAPIServer.ClientConfig)
+		test.apiServer.Config)
 }
 
 func TestKMSv2SingleService(t *testing.T) {
@@ -617,8 +615,7 @@ resources:
 	}
 	t.Cleanup(test.cleanUp)
 
-	// the storage registry for CRs is dynamic so create one to exercise the wiring
-	etcd.CreateTestCRDs(t, apiextensionsclientset.NewForConfigOrDie(test.kubeAPIServer.ClientConfig), false, etcd.GetCustomResourceDefinitionData()...)
+	// the CRDs have already been created as part of etcd.StartRealAPIServerOrDieForKMS()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	t.Cleanup(cancel)
@@ -629,7 +626,7 @@ resources:
 		Resource:         gvr,
 		GroupVersionKind: gvr.GroupVersion().WithKind("Panda"),
 		Scope:            meta.RESTScopeRoot,
-	}, dynamic.NewForConfigOrDie(test.kubeAPIServer.ClientConfig))
+	}, dynamic.NewForConfigOrDie(test.apiServer.Config))
 	if err != nil {
 		t.Fatal(err)
 	}

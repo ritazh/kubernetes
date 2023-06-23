@@ -19,6 +19,7 @@ package transformation
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -45,6 +46,7 @@ import (
 	"k8s.io/client-go/rest"
 	"k8s.io/component-base/metrics/legacyregistry"
 	"k8s.io/klog/v2"
+	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
 	"k8s.io/kubernetes/test/integration"
 	"k8s.io/kubernetes/test/integration/etcd"
@@ -78,10 +80,10 @@ type transformTest struct {
 	storageConfig     *storagebackend.Config
 	configDir         string
 	transformerConfig string
-	kubeAPIServer     kubeapiservertesting.TestServer
 	restClient        *kubernetes.Clientset
 	ns                *corev1.Namespace
 	secret            *corev1.Secret
+	apiServer         *etcd.APIServer
 }
 
 func newTransformTest(l kubeapiservertesting.Logger, transformerConfigYAML string, reload bool, configDir string) (*transformTest, error) {
@@ -101,27 +103,24 @@ func newTransformTest(l kubeapiservertesting.Logger, transformerConfigYAML strin
 		// configDir already exists. api-server must be restarting with existing encryption config
 		e.configDir = configDir
 	}
+	t := l.(*testing.T)
+	e.apiServer = etcd.StartRealAPIServerOrDieForKMS(t, e.getEncryptionOptions(reload), func(opts *options.ServerRunOptions) {
+	})
+	klog.Infof("Started kube-apiserver %v", e.apiServer.Config.Host)
+	e.storageConfig = &e.apiServer.ServerOpts.Etcd.StorageConfig
+	e.restClient = e.apiServer.Client.(*kubernetes.Clientset)
 
-	if e.kubeAPIServer, err = kubeapiservertesting.StartTestServer(l, nil, e.getEncryptionOptions(reload), e.storageConfig); err != nil {
-		return nil, fmt.Errorf("failed to start KubeAPI server: %v", err)
-	}
-	klog.Infof("Started kube-apiserver %v", e.kubeAPIServer.ClientConfig.Host)
-
-	if e.restClient, err = kubernetes.NewForConfig(e.kubeAPIServer.ClientConfig); err != nil {
-		return nil, fmt.Errorf("error while creating rest client: %v", err)
-	}
-
-	if e.ns, err = e.createNamespace(testNamespace); err != nil {
+	if e.ns, err = e.restClient.CoreV1().Namespaces().Create(context.TODO(), &corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: testNamespace}}, metav1.CreateOptions{}); err != nil {
 		return nil, err
 	}
 
 	if transformerConfigYAML != "" && reload {
 		// when reloading is enabled, this healthz endpoint is always present
-		mustBeHealthy(l, "/kms-providers", "ok", e.kubeAPIServer.ClientConfig)
+		mustBeHealthy(l, "/kms-providers", "ok", e.apiServer.Config)
 
 		// excluding healthz endpoints even if they do not exist should work
 		mustBeHealthy(l, "", `warn: some health checks cannot be excluded: no matches for "kms-provider-0","kms-provider-1","kms-provider-2","kms-provider-3"`,
-			e.kubeAPIServer.ClientConfig, "kms-provider-0", "kms-provider-1", "kms-provider-2", "kms-provider-3")
+			e.apiServer.Config, "kms-provider-0", "kms-provider-1", "kms-provider-2", "kms-provider-3")
 	}
 
 	return &e, nil
@@ -130,14 +129,14 @@ func newTransformTest(l kubeapiservertesting.Logger, transformerConfigYAML strin
 func (e *transformTest) cleanUp() {
 	os.RemoveAll(e.configDir)
 
-	if e.kubeAPIServer.ClientConfig != nil {
+	if e.apiServer != nil {
 		e.shutdownAPIServer()
 	}
 }
 
 func (e *transformTest) shutdownAPIServer() {
 	e.restClient.CoreV1().Namespaces().Delete(context.TODO(), e.ns.Name, *metav1.NewDeleteOptions(0))
-	e.kubeAPIServer.TearDownFn()
+	e.apiServer.Cleanup()
 }
 
 func (e *transformTest) runResource(l kubeapiservertesting.Logger, unSealSecretFunc unSealSecret, expectedEnvelopePrefix,
@@ -174,8 +173,10 @@ func (e *transformTest) runResource(l kubeapiservertesting.Logger, unSealSecretF
 		return
 	}
 	if resource == "secrets" {
-		if !strings.Contains(string(v), secretVal) {
-			l.Errorf("expected %q after decryption, but got %q", secretVal, string(v))
+		///TODO: RITA why is this needed now?
+		encodedSecretVal := base64.StdEncoding.EncodeToString([]byte(secretVal))
+		if !strings.Contains(string(v), encodedSecretVal) {
+			l.Errorf("expected %q after decryption, but got %q", encodedSecretVal, string(v))
 		}
 	} else if resource == "configmaps" {
 		if !strings.Contains(string(v), configMapVal) {
@@ -215,7 +216,7 @@ func (e *transformTest) runResource(l kubeapiservertesting.Logger, unSealSecretF
 	} else {
 		l.Logf("Get object with dynamic client")
 		fooResource := schema.GroupVersionResource{Group: group, Version: version, Resource: resource}
-		obj, err := dynamic.NewForConfigOrDie(e.kubeAPIServer.ClientConfig).Resource(fooResource).Namespace(namespaceName).Get(context.TODO(), name, metav1.GetOptions{})
+		obj, err := dynamic.NewForConfigOrDie(e.apiServer.Config).Resource(fooResource).Namespace(namespaceName).Get(context.TODO(), name, metav1.GetOptions{})
 		if err != nil {
 			l.Fatalf("Failed to get test instance: %v, name: %s", err, name)
 		}
@@ -278,7 +279,7 @@ func (e *transformTest) createEncryptionConfig() (
 		os.RemoveAll(tempDir)
 		return tempDir, fmt.Errorf("error while writing encryption config: %v", err)
 	}
-
+	klog.Infof("createEncryptionConfig done")
 	return tempDir, nil
 }
 
@@ -473,7 +474,7 @@ func (e *transformTest) inplaceUpdatePod(namespace string, obj *unstructured.Uns
 }
 
 func (e *transformTest) readRawRecordFromETCD(path string) (*clientv3.GetResponse, error) {
-	rawClient, etcdClient, err := integration.GetEtcdClients(e.kubeAPIServer.ServerOpts.Etcd.StorageConfig.Transport)
+	rawClient, etcdClient, err := integration.GetEtcdClients(e.storageConfig.Transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create etcd client: %v", err)
 	}
@@ -490,7 +491,7 @@ func (e *transformTest) readRawRecordFromETCD(path string) (*clientv3.GetRespons
 }
 
 func (e *transformTest) writeRawRecordToETCD(path string, data []byte) (*clientv3.PutResponse, error) {
-	rawClient, etcdClient, err := integration.GetEtcdClients(e.kubeAPIServer.ServerOpts.Etcd.StorageConfig.Transport)
+	rawClient, etcdClient, err := integration.GetEtcdClients(e.storageConfig.Transport)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create etcd client: %v", err)
 	}
