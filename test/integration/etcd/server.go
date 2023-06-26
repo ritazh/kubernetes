@@ -23,6 +23,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -33,6 +34,7 @@ import (
 
 	apiextensionsv1 "k8s.io/apiextensions-apiserver/pkg/apis/apiextensions/v1"
 	apiextensionsclientset "k8s.io/apiextensions-apiserver/pkg/client/clientset/clientset"
+	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -48,6 +50,8 @@ import (
 	"k8s.io/client-go/restmapper"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
+
+	//"k8s.io/kubernetes/cmd/kubeadm/test/resources"
 	"k8s.io/kubernetes/test/integration"
 	"k8s.io/kubernetes/test/integration/framework"
 	netutils "k8s.io/utils/net"
@@ -250,11 +254,16 @@ type APIServer struct {
 	Dynamic    dynamic.Interface
 	Config     *restclient.Config
 	KV         clientv3.KV
+	EtcdClient *clientv3.Client
 	Mapper     meta.RESTMapper
 	Resources  []Resource
 	Cleanup    func()
 	ServerOpts *options.ServerRunOptions
+	RestartFn  RestartFunc // Start function
 }
+
+// RestartFunc is to be called to start a test server.
+type RestartFunc func(oldServer APIServer, flags []string) (APIServer, error)
 
 // Resource contains REST mapping information for a specific resource and extra metadata such as delete collection support
 type Resource struct {
@@ -262,22 +271,33 @@ type Resource struct {
 	HasDeleteCollection bool
 }
 
-// StartRealAPIServerOrDieForKMS starts an API server that is appropriate for use in tests that require one of every resource
-func StartRealAPIServerOrDieForKMS(t *testing.T, customFlags []string, configFuncs ...func(*options.ServerRunOptions)) *APIServer {
-	testName := strings.ReplaceAll(t.Name(), "/", "_")
-	certDir, err := os.MkdirTemp("", testName)
-	if err != nil {
-		t.Fatal(err)
-	}
-
+func start(ctx context.Context, errCh chan error, t *testing.T, customFlags []string, wg *sync.WaitGroup, certDir string, restart bool, oldServer APIServer, configFuncs ...func(*options.ServerRunOptions)) (result APIServer, err error) {
 	_, defaultServiceClusterIPRange, err := netutils.ParseCIDRSloppy("10.0.0.0/24")
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	listener, _, err := genericapiserveroptions.CreateListener("tcp", "127.0.0.1:0", net.ListenConfig{})
 	if err != nil {
 		t.Fatal(err)
+	}
+
+	kubeAPIServerOptions := options.NewServerRunOptions()
+	kubeAPIServerOptions.SecureServing.Listener = listener
+	kubeAPIServerOptions.SecureServing.ServerCert.CertDirectory = certDir
+	kubeAPIServerOptions.Etcd.StorageConfig.Transport.ServerList = []string{framework.GetEtcdURL()}
+	//kubeAPIServerOptions.Etcd.DefaultStorageMediaType = runtime.ContentTypeJSON // force json we can easily interpret the result in etcd // RITA: if we use this, then we have to do base64 encode to compare secret data
+	kubeAPIServerOptions.ServiceClusterIPRanges = defaultServiceClusterIPRange.String()
+	//kubeAPIServerOptions.Authentication.APIAudiences = []string{"https://foo.bar.example.com"}
+	kubeAPIServerOptions.Authentication.ServiceAccounts.Issuers = []string{"https://foo.bar.example.com"}
+	//kubeAPIServerOptions.Authorization.Modes = []string{"RBAC"}
+	//kubeAPIServerOptions.Admission.GenericAdmission.DisablePlugins = []string{"ServiceAccount"}
+	kubeAPIServerOptions.APIEnablement.RuntimeConfig["api/all"] = "true"
+
+	if !restart {
+		kubeAPIServerOptions.Etcd.StorageConfig = *framework.SharedEtcd()
+	} else {
+		t.Log("a restart, using oldServer StorageConfig")
+		kubeAPIServerOptions.Etcd.StorageConfig = oldServer.ServerOpts.Etcd.StorageConfig
 	}
 
 	saSigningKeyFile, err := os.CreateTemp("/tmp", "insecure_test_key")
@@ -288,26 +308,14 @@ func StartRealAPIServerOrDieForKMS(t *testing.T, customFlags []string, configFun
 	if err = os.WriteFile(saSigningKeyFile.Name(), []byte(ecdsaPrivateKey), 0666); err != nil {
 		t.Fatalf("write file %s failed: %v", saSigningKeyFile.Name(), err)
 	}
-
-	kubeAPIServerOptions := options.NewServerRunOptions()
-	kubeAPIServerOptions.SecureServing.Listener = listener
-	kubeAPIServerOptions.SecureServing.ServerCert.CertDirectory = certDir
 	kubeAPIServerOptions.ServiceAccountSigningKeyFile = saSigningKeyFile.Name()
-	kubeAPIServerOptions.Etcd.StorageConfig.Transport.ServerList = []string{framework.GetEtcdURL()}
-	kubeAPIServerOptions.Etcd.DefaultStorageMediaType = runtime.ContentTypeJSON // force json we can easily interpret the result in etcd
-	kubeAPIServerOptions.ServiceClusterIPRanges = defaultServiceClusterIPRange.String()
-	kubeAPIServerOptions.Authentication.APIAudiences = []string{"https://foo.bar.example.com"}
-	kubeAPIServerOptions.Authentication.ServiceAccounts.Issuers = []string{"https://foo.bar.example.com"}
 	kubeAPIServerOptions.Authentication.ServiceAccounts.KeyFiles = []string{saSigningKeyFile.Name()}
-	kubeAPIServerOptions.Authorization.Modes = []string{"RBAC"}
-	kubeAPIServerOptions.Admission.GenericAdmission.DisablePlugins = []string{"ServiceAccount"}
-	kubeAPIServerOptions.APIEnablement.RuntimeConfig["api/all"] = "true"
-	kubeAPIServerOptions.Etcd.StorageConfig = *framework.SharedEtcd()
 
 	fs := pflag.NewFlagSet("test", pflag.PanicOnError)
 	for _, f := range kubeAPIServerOptions.Flags().FlagSets {
 		fs.AddFlagSet(f)
 	}
+	t.Logf("customFlags: %v", customFlags)
 	if err := fs.Parse(customFlags); err != nil {
 		t.Fatal(err)
 	}
@@ -329,15 +337,19 @@ func StartRealAPIServerOrDieForKMS(t *testing.T, customFlags []string, configFun
 	if err != nil {
 		t.Fatal(err)
 	}
-
 	// make sure we start with a clean slate
-	if _, err := kvClient.Delete(context.Background(), "/registry/", clientv3.WithPrefix()); err != nil {
-		t.Fatal(err)
+	if !restart {
+		t.Log("not a restart, delete all in registry")
+		if _, err := kvClient.Delete(context.Background(), "/registry/", clientv3.WithPrefix()); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		t.Log("a restart")
 	}
 
 	config, err := app.NewConfig(completedOptions)
 	if err != nil {
-		t.Fatal(err)
+		return result, err
 	}
 	completed, err := config.Complete()
 	if err != nil {
@@ -359,24 +371,31 @@ func StartRealAPIServerOrDieForKMS(t *testing.T, customFlags []string, configFun
 
 	kubeClient := clientset.NewForConfigOrDie(kubeClientConfig)
 
-	stopCh := make(chan struct{})
-	errCh := make(chan error)
+	// stopCh := make(chan struct{})
+	// errCh := make(chan error)
+	wg.Add(1)
 	go func() {
 		// Catch panics that occur in this go routine so we get a comprehensible failure
 		defer func() {
+			t.Logf("RITA wg done")
+			wg.Done()
 			if err := recover(); err != nil {
 				t.Errorf("Unexpected panic trying to start API server: %#v", err)
 			}
 		}()
-		defer close(errCh)
+		t.Logf("RITA START")
+		//defer close(errCh)
 
 		prepared, err := kubeAPIServer.PrepareRun()
 		if err != nil {
 			errCh <- err
+			t.Logf("RITA ERR DONE 1")
 			return
 		}
-		if err := prepared.Run(stopCh); err != nil {
+		if err := prepared.Run(ctx.Done()); err != nil {
+			t.Logf("RITA ERR 2 %v", err)
 			errCh <- err
+			t.Logf("RITA ERR DONE 2")
 			t.Error(err)
 			return
 		}
@@ -409,49 +428,126 @@ func StartRealAPIServerOrDieForKMS(t *testing.T, customFlags []string, configFun
 		return status == http.StatusOK, nil
 	}); err != nil {
 		t.Log(lastHealth)
-		t.Fatal(err)
+		return result, err
 	}
 
-	// create CRDs so we can make sure that custom resources do not get lost
-	CreateTestCRDs(t, apiextensionsclientset.NewForConfigOrDie(kubeClientConfig), false, GetCustomResourceDefinitionData()...)
-
-	// force cached discovery reset
-	discoveryClient := cacheddiscovery.NewMemCacheClient(kubeClient.Discovery())
-	restMapper := restmapper.NewDeferredDiscoveryRESTMapper(discoveryClient)
-	restMapper.Reset()
-
-	_, serverResources, err := kubeClient.Discovery().ServerGroupsAndResources()
+	// wait until default namespace is created
+	err = wait.Poll(100*time.Millisecond, 30*time.Second, func() (bool, error) {
+		select {
+		case err := <-errCh:
+			return false, err
+		default:
+		}
+		if _, err := kubeClient.CoreV1().Namespaces().Get(context.TODO(), "default", metav1.GetOptions{}); err != nil {
+			if !errors.IsNotFound(err) {
+				t.Logf("Unable to get default namespace: %v", err)
+			}
+			return false, nil
+		}
+		return true, nil
+	})
 	if err != nil {
+		t.Logf("failed to wait for default namespace to be created: %v", err)
 		t.Fatal(err)
 	}
-
-	cleanup := func() {
-		// Closing stopCh is stopping apiserver and cleaning up
-		// after itself, including shutting down its storage layer.
-		close(stopCh)
-
-		// If the apiserver was started, let's wait for it to
-		// shutdown clearly.
-		err, ok := <-errCh
-		if ok && err != nil {
-			t.Error(err)
-		}
-		rawClient.Close()
-		if err := os.RemoveAll(certDir); err != nil {
-			t.Log(err)
-		}
+	if !restart {
+		// create CRDs so we can make sure that custom resources do not get lost
+		CreateTestCRDs(t, apiextensionsclientset.NewForConfigOrDie(kubeClientConfig), false, GetCustomResourceDefinitionData()...)
 	}
 
-	return &APIServer{
+	// // force cached discovery reset
+	// discoveryClient := cacheddiscovery.NewMemCacheClient(kubeClient.Discovery())
+	// restMapper := restmapper.NewDeferredDiscoveryRESTMapper(discoveryClient)
+	// restMapper.Reset()
+
+	// _, serverResources, err := kubeClient.Discovery().ServerGroupsAndResources()
+	// if err != nil {
+	// 	t.Fatal(err)
+	// }
+	return APIServer{
 		Client:     kubeClient,
 		Dynamic:    dynamic.NewForConfigOrDie(kubeClientConfig),
 		Config:     kubeClientConfig,
 		KV:         kvClient,
-		Mapper:     restMapper,
-		Resources:  GetResources(t, serverResources),
-		Cleanup:    cleanup,
+		EtcdClient: rawClient,
 		ServerOpts: kubeAPIServerOptions,
+		// Mapper:    restMapper,
+		// Resources: GetResources(t, serverResources),
+		// Cleanup:   cleanup,
+	}, nil
+}
+
+// StartRealAPIServerOrDieForKMS starts an API server that is appropriate for use in tests that require one of every resource
+func StartRealAPIServerOrDieForKMS(t *testing.T, customFlags []string, configFuncs ...func(*options.ServerRunOptions)) (res APIServer, err error) {
+	testName := strings.ReplaceAll(t.Name(), "/", "_")
+	certDir, err := os.MkdirTemp("", testName)
+	if err != nil {
+		t.Fatal(err)
 	}
+
+	t.Logf("RITA cerDir: %s MkdirTemp ", certDir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+
+	errCh := make(chan error, 1_000)
+	var wg sync.WaitGroup
+
+	cleanup := func() {
+		t.Logf("RITA apiServer.Cleanup")
+		// Closing stopCh is stopping apiserver and cleaning up
+		// after itself, including shutting down its storage layer.
+		//close(stopCh)
+		cancel()
+		t.Logf("END WAIT 1")
+		wg.Wait()
+		t.Logf("END WAIT 2")
+
+		select {
+		case err := <-errCh:
+			t.Errorf("Failed to shutdown test server clearly: %v", err)
+		default:
+			// we do not care if there are no errors
+		}
+
+		// If the apiserver was started, let's wait for it to
+		// shutdown clearly.
+		// err, ok := <-errCh
+		// if ok && err != nil {
+		// 	t.Error(err)
+		// }
+		if err := os.RemoveAll(certDir); err != nil {
+			t.Log(err)
+		}
+		t.Logf("RITA cerDir RemoveAll: %s ", certDir)
+		t.Logf("END WAIT 3")
+		close(errCh)
+	}
+	defer func() {
+		if res.Cleanup == nil {
+			cleanup()
+		}
+	}()
+
+	ctx2, cancel2 := context.WithCancel(ctx)
+	t.Cleanup(cancel2)
+
+	res.Cleanup = func() {
+		cleanup()
+		if res.EtcdClient != nil {
+			_ = res.EtcdClient.Close()
+		}
+	}
+
+	res.RestartFn = func(oldServer APIServer, newFlags []string) (APIServer, error) {
+		t.Logf("BEFORE WAIT")
+		cancel2()
+		wg.Wait()
+		t.Logf("AFTER WAIT")
+		ctx2, cancel2 = context.WithCancel(ctx)
+		return start(ctx2, errCh, t, newFlags, &wg, certDir, true, oldServer, configFuncs...)
+	}
+	return start(ctx2, errCh, t, customFlags, &wg, certDir, false, res, configFuncs...)
 }
 
 // GetResources fetches the Resources associated with serverResources that support get and create

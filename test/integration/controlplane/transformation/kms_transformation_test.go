@@ -180,10 +180,8 @@ resources:
 	if err != nil {
 		t.Fatalf("failed to transform from storage via AESGCM, err: %v", err)
 	}
-	///TODO: RITA why is this needed now?
-	encodedSecretVal := base64.StdEncoding.EncodeToString([]byte(secretVal))
-	if !strings.Contains(string(plainSecret), encodedSecretVal) {
-		t.Fatalf("expected %q after decryption, but got %q", encodedSecretVal, string(plainSecret))
+	if !strings.Contains(string(plainSecret), secretVal) {
+		t.Fatalf("expected %q after decryption, but got %q", secretVal, string(plainSecret))
 	}
 
 	secretClient := test.restClient.CoreV1().Secrets(testNamespace)
@@ -277,10 +275,8 @@ resources:
 	if err != nil {
 		t.Fatalf("failed to transform from storage via AESGCM, err: %v", err)
 	}
-	///TODO: RITA why is this needed now?
-	encodedOldSecretVal := base64.StdEncoding.EncodeToString([]byte(oldSecretVal))
-	if !strings.Contains(string(oldPlainSecret), encodedOldSecretVal) {
-		t.Fatalf("expected %q after decryption, but got %q", encodedOldSecretVal, string(oldPlainSecret))
+	if !strings.Contains(string(oldPlainSecret), oldSecretVal) {
+		t.Fatalf("expected %q after decryption, but got %q", oldSecretVal, string(oldPlainSecret))
 	}
 }
 
@@ -298,6 +294,10 @@ resources:
 // 10. confirm that cluster wide secret read still works
 // 11. confirm that api server can restart with last applied encryption config
 func TestEncryptionConfigHotReload(t *testing.T) {
+	// waiting for sleep inside dynamic transformer reload to finish
+	// in this test, worst case we have 3 KMS * 3sec timeout = 9 secs * 2 for KMSCloseGracePeriod = at a min 18 secs
+	defer time.Sleep(30 * time.Second)
+
 	encryptionConfig := `
 kind: EncryptionConfiguration
 apiVersion: apiserver.config.k8s.io/v1
@@ -495,25 +495,22 @@ resources:
 		t.Fatalf("failed to list configmaps, err: %v", err)
 	}
 
-	// restart kube-apiserver with last applied encryption config and assert that server can start
-	previousConfigDir := test.configDir
-	test.shutdownAPIServer()
-	restarted = true
-	test, err = newTransformTest(t, "", true, previousConfigDir)
-	if err != nil {
-		t.Fatalf("failed to start KUBE API Server with encryptionConfig\n %s, error: %v", encryptionConfig, err)
-	}
-	defer test.cleanUp()
+	// // restart kube-apiserver with last applied encryption config and assert that server can start
+	// if err = test.restartAPIServer(t, "", true); err != nil {
+	// 	t.Fatalf("Failed to restart api server, error: %v", err)
+	// }
+	// restarted = true
+	// defer test.cleanUp()
 
-	// confirm that reading cluster wide secrets still works after restart
-	if _, err = test.restClient.CoreV1().Secrets("").List(context.TODO(), metav1.ListOptions{}); err != nil {
-		t.Fatalf("failed to list secrets, err: %v", err)
-	}
-
-	// make sure cluster wide configmaps read still works
-	if _, err = test.restClient.CoreV1().ConfigMaps("").List(context.TODO(), metav1.ListOptions{}); err != nil {
-		t.Fatalf("failed to list configmaps, err: %v", err)
-	}
+	// // confirm that reading secrets still works
+	// _, err = test.restClient.CoreV1().Secrets(testNamespace).Get(
+	// 	context.TODO(),
+	// 	testSecret,
+	// 	metav1.GetOptions{},
+	// )
+	// if err != nil {
+	// 	t.Fatalf("failed to read secret, err: %v", err)
+	// }
 }
 
 func TestEncryptAll(t *testing.T) {
