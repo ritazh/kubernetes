@@ -71,6 +71,34 @@ func TestValidateAuthorizationConfiguration(t *testing.T) {
 			knownTypes:      sets.NewString(string("Webhook")),
 			repeatableTypes: sets.NewString(string("Webhook")),
 		},
+		// bare minimum configuration with Webhook and MatchConditions
+		{
+			configuration: api.AuthorizationConfiguration{
+				Authorizers: []api.AuthorizerConfiguration{
+					{
+						Type: "Webhook",
+						Webhook: &api.WebhookConfiguration{
+							Name:                       "default",
+							Timeout:                    metav1.Duration{5 * time.Second},
+							FailurePolicy:              "NoOpinion",
+							SubjectAccessReviewVersion: "v1",
+							ConnectionInfo: api.WebhookConnectionInfo{
+								Type: "InClusterConfig",
+							},
+							MatchConditions: []api.WebhookMatchCondition{
+								{
+									Message:    "test",
+									Expression: "true", //"request.resourceAttributes.namespace == 'kube-system'",
+								},
+							},
+						},
+					},
+				},
+			},
+			expectedErrList: field.ErrorList{},
+			knownTypes:      sets.NewString(string("Webhook")),
+			repeatableTypes: sets.NewString(string("Webhook")),
+		},
 		// bare minimum configuration with multiple webhooks
 		{
 			configuration: api.AuthorizationConfiguration{

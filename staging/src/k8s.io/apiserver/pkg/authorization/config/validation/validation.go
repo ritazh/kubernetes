@@ -23,6 +23,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/cel-go/cel"
+
 	v1 "k8s.io/api/authorization/v1"
 	"k8s.io/api/authorization/v1beta1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -147,7 +149,37 @@ func ValidateWebhookConfiguration(fldPath *field.Path, c *authorizationapi.Webho
 }
 
 func ValidateWebhookMatchCondition(fldPath *field.Path, sampleSAR runtime.Object, expression string) field.ErrorList {
-	allErrs := field.ErrorList{}
-	// TODO: typecheck CEL expression
-	return allErrs
+	var allErrors field.ErrorList
+	trimmedExpression := strings.TrimSpace(expression)
+	if len(trimmedExpression) == 0 {
+		allErrors = append(allErrors, field.Required(fldPath.Child("expression"), ""))
+	} else {
+		allErrors = append(allErrors, validateMatchConditionsExpression(trimmedExpression, sampleSAR, fldPath.Child("expression"))...)
+	}
+	return allErrors
+}
+
+func validateMatchConditionsExpression(expression string, sampleSAR runtime.Object, fldPath *field.Path) field.ErrorList {
+	var allErrors field.ErrorList
+	env, err := cel.NewEnv()
+	if err != nil {
+		allErrors = append(allErrors, field.Invalid(fldPath, expression, fmt.Sprintf("unexpected error loading CEL environment: %v", err)))
+		return allErrors 
+	}
+	ast, issues := env.Compile(expression)
+	if issues != nil {
+		allErrors = append(allErrors, field.Invalid(fldPath, expression, fmt.Sprintf("compilation failed: %s", issues.String())))
+		return allErrors
+	}
+	if ast.OutputType() != cel.BoolType {
+		allErrors = append(allErrors, field.Invalid(fldPath, expression, fmt.Sprintf("cel expression must evaluate to a bool, instead got type: %s", ast.OutputType())))
+		return allErrors
+	}
+	_, err = cel.AstToCheckedExpr(ast)
+	if err != nil {
+		if err != nil {
+			allErrors = append(allErrors, field.Invalid(fldPath, expression, fmt.Sprintf("unexpected compilation error: %v", err)))
+		}
+	}
+	return allErrors
 }

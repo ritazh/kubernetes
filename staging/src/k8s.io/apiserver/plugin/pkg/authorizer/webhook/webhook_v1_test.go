@@ -42,6 +42,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	authzconfig "k8s.io/apiserver/pkg/authorization/config"
 	webhookutil "k8s.io/apiserver/pkg/util/webhook"
 	v1 "k8s.io/client-go/tools/clientcmd/api/v1"
 )
@@ -205,7 +206,7 @@ current-context: default
 			if err != nil {
 				return fmt.Errorf("error building sar client: %v", err)
 			}
-			_, err = newWithBackoff(sarClient, 0, 0, testRetryBackoff, noopAuthorizerMetrics())
+			_, err = newWithBackoff(sarClient, 0, 0, testRetryBackoff, []authzconfig.WebhookMatchCondition{}, noopAuthorizerMetrics())
 			return err
 		}()
 		if err != nil && !tt.wantErr {
@@ -348,7 +349,7 @@ func newV1Authorizer(callbackURL string, clientCert, clientKey, ca []byte, cache
 	if err != nil {
 		return nil, fmt.Errorf("error building sar client: %v", err)
 	}
-	return newWithBackoff(sarClient, cacheTime, cacheTime, testRetryBackoff, metrics)
+	return newWithBackoff(sarClient, cacheTime, cacheTime, testRetryBackoff, []authzconfig.WebhookMatchCondition{}, metrics)
 }
 
 func TestV1TLSConfig(t *testing.T) {

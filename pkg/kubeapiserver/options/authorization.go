@@ -204,6 +204,13 @@ func (o *BuiltInAuthorizationOptions) buildAuthorizationConfiguration() *authzco
 						Type:           "KubeConfig",
 						KubeConfigFile: &o.WebhookConfigFile,
 					},
+					/// TODO: RITA remove, this is for testing
+					MatchConditions: []authzconfig.WebhookMatchCondition{
+						{
+							Expression: "true",
+							Message:    "test",
+						},
+					},
 				},
 			})
 		}

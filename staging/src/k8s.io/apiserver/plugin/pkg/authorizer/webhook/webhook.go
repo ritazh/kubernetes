@@ -21,18 +21,26 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"reflect"
 	"strconv"
 	"time"
+
+	"github.com/google/cel-go/cel"
+	celtypes "github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/interpreter"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
 	authorizationv1beta1 "k8s.io/api/authorization/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/cache"
 	"k8s.io/apimachinery/pkg/util/wait"
+	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
+	authzconfig "k8s.io/apiserver/pkg/authorization/config"
 	"k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/client-go/kubernetes/scheme"
 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
@@ -66,11 +74,33 @@ type WebhookAuthorizer struct {
 	retryBackoff        wait.Backoff
 	decisionOnError     authorizer.Decision
 	metrics             AuthorizerMetrics
+	matchConditions     []authzconfig.WebhookMatchCondition
+}
+
+type evaluationActivation struct {
+	request interface{}
+}
+
+// ResolveName returns a value from the activation by qualified name, or false if the name
+// could not be found.
+func (a *evaluationActivation) ResolveName(name string) (interface{}, bool) {
+	switch name {
+	case "request":
+		return a.request, true
+	default:
+		return nil, false
+	}
+}
+
+// Parent returns the parent of the current activation, may be nil.
+// If non-nil, the parent will be searched during resolve calls.
+func (a *evaluationActivation) Parent() interpreter.Activation {
+	return nil
 }
 
 // NewFromInterface creates a WebhookAuthorizer using the given subjectAccessReview client
 func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1Interface, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, metrics AuthorizerMetrics) (*WebhookAuthorizer, error) {
-	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, metrics)
+	return newWithBackoff(&subjectAccessReviewV1Client{subjectAccessReview.RESTClient()}, authorizedTTL, unauthorizedTTL, retryBackoff, []authzconfig.WebhookMatchCondition{}, metrics)
 }
 
 // New creates a new WebhookAuthorizer from the provided kubeconfig file.
@@ -92,19 +122,19 @@ func NewFromInterface(subjectAccessReview authorizationv1client.AuthorizationV1I
 //
 // For additional HTTP configuration, refer to the kubeconfig documentation
 // https://kubernetes.io/docs/user-guide/kubeconfig-file/.
-func New(config *rest.Config, version string, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff) (*WebhookAuthorizer, error) {
+func New(config *rest.Config, version string, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, matchConditions []authzconfig.WebhookMatchCondition) (*WebhookAuthorizer, error) {
 	subjectAccessReview, err := subjectAccessReviewInterfaceFromConfig(config, version, retryBackoff)
 	if err != nil {
 		return nil, err
 	}
-	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, AuthorizerMetrics{
+	return newWithBackoff(subjectAccessReview, authorizedTTL, unauthorizedTTL, retryBackoff, matchConditions, AuthorizerMetrics{
 		RecordRequestTotal:   noopMetrics{}.RecordRequestTotal,
 		RecordRequestLatency: noopMetrics{}.RecordRequestLatency,
 	})
 }
 
 // newWithBackoff allows tests to skip the sleep.
-func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, metrics AuthorizerMetrics) (*WebhookAuthorizer, error) {
+func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, unauthorizedTTL time.Duration, retryBackoff wait.Backoff, matchConditions []authzconfig.WebhookMatchCondition, metrics AuthorizerMetrics) (*WebhookAuthorizer, error) {
 	return &WebhookAuthorizer{
 		subjectAccessReview: subjectAccessReview,
 		responseCache:       cache.NewLRUExpireCache(8192),
@@ -113,6 +143,7 @@ func newWithBackoff(subjectAccessReview subjectAccessReviewer, authorizedTTL, un
 		retryBackoff:        retryBackoff,
 		decisionOnError:     authorizer.DecisionNoOpinion,
 		metrics:             metrics,
+		matchConditions:     matchConditions,
 	}, nil
 }
 
@@ -190,6 +221,16 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 			Verb: attr.GetVerb(),
 		}
 	}
+	// Process Match Conditions before calling the webhook
+	// TODO: check cache
+	matches, err := w.Match(ctx, r)
+	if err != nil {
+		return w.decisionOnError, "", err
+	}
+	if !matches {
+		return authorizer.DecisionNoOpinion, "", nil
+	}
+
 	key, err := json.Marshal(r.Spec)
 	if err != nil {
 		return w.decisionOnError, "", err
@@ -254,6 +295,71 @@ func (w *WebhookAuthorizer) RulesFor(user user.Info, namespace string) ([]author
 	)
 	incomplete := true
 	return resourceRules, nonResourceRules, incomplete, fmt.Errorf("webhook authorizer does not support user rule resolution")
+}
+
+// Match is used to evaluate the request against the authorizer's cel expression to return match or no match found
+func (w *WebhookAuthorizer) Match(ctx context.Context, r *authorizationv1.SubjectAccessReview) (bool, error) {
+	if r.Spec.ResourceAttributes == nil {
+		return false, nil
+	}
+	// if len(w.matchConditions) > 0 {
+	// 	return false, nil
+	// }
+	expression := "request.name == 'my-pod'"
+	env, err := cel.NewEnv()
+	if err != nil {
+		return false, err
+	}
+	ast, issues := env.Compile(expression)
+	if issues != nil {
+		return false, fmt.Errorf("compilation failed: %s", issues.String())
+	}
+	if ast.OutputType() != cel.BoolType {
+		return false, fmt.Errorf("cel expression must evaluate to a bool, instead got type: %s", ast.OutputType())
+	}
+	_, err = cel.AstToCheckedExpr(ast)
+	if err != nil {
+		if err != nil {
+			return false, fmt.Errorf("unexpected compilation error: %v", err)
+		}
+	}
+	prog, err := env.Program(ast,
+		cel.InterruptCheckFrequency(celconfig.CheckFrequency),
+	)
+	if err != nil {
+		// TODO: check failurePolicy
+		return false, fmt.Errorf("program instantiation failed: " + err.Error())
+	}
+	
+	requestVal, err := convertObjectToUnstructured(r.Spec.ResourceAttributes)
+	if err != nil {
+		return false, fmt.Errorf("convert object to unstructured failed: " + err.Error())
+	}
+	input := &evaluationActivation{
+		request: requestVal.Object,
+	}
+	klog.Infof("cel input: %v", input)
+	evalResult, evalDetails, err := prog.ContextEval(ctx, input)
+	if err != nil {
+		return false, fmt.Errorf("program eval failed: %v, evalDetails: %v", err, evalDetails)
+	}
+	klog.Infof("evalResult: %v", evalResult)
+	klog.Infof("evalDetails: %v", evalDetails)
+	if evalResult == celtypes.False {
+		return false, nil
+	}
+	return true, nil
+}
+
+func convertObjectToUnstructured(obj interface{}) (*unstructured.Unstructured, error) {
+	if obj == nil || reflect.ValueOf(obj).IsNil() {
+		return &unstructured.Unstructured{Object: nil}, nil
+	}
+	ret, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil, err
+	}
+	return &unstructured.Unstructured{Object: ret}, nil
 }
 
 func convertToSARExtra(extra map[string][]string) map[string]authorizationv1.ExtraValue {
