@@ -36,16 +36,22 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/util/cache"
+	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	celconfig "k8s.io/apiserver/pkg/apis/cel"
 	"k8s.io/apiserver/pkg/authentication/user"
 	"k8s.io/apiserver/pkg/authorization/authorizer"
 	authzconfig "k8s.io/apiserver/pkg/authorization/config"
+	//apiservercel "k8s.io/apiserver/pkg/cel"
+	//"k8s.io/apiserver/pkg/cel/common"
+	"k8s.io/apiserver/pkg/cel/environment"
+	//"k8s.io/apiserver/pkg/cel/openapi"
 	"k8s.io/apiserver/pkg/util/webhook"
 	"k8s.io/client-go/kubernetes/scheme"
 	authorizationv1client "k8s.io/client-go/kubernetes/typed/authorization/v1"
 	"k8s.io/client-go/rest"
 	"k8s.io/klog/v2"
+	//"k8s.io/kube-openapi/pkg/validation/spec"
 )
 
 const (
@@ -78,15 +84,15 @@ type WebhookAuthorizer struct {
 }
 
 type evaluationActivation struct {
-	request interface{}
+	review interface{}
 }
 
 // ResolveName returns a value from the activation by qualified name, or false if the name
 // could not be found.
 func (a *evaluationActivation) ResolveName(name string) (interface{}, bool) {
 	switch name {
-	case "request":
-		return a.request, true
+	case "review":
+		return a.review, true
 	default:
 		return nil, false
 	}
@@ -223,10 +229,12 @@ func (w *WebhookAuthorizer) Authorize(ctx context.Context, attr authorizer.Attri
 	}
 	// Process Match Conditions before calling the webhook
 	// TODO: check cache
+
 	matches, err := w.Match(ctx, r)
 	if err != nil {
 		return w.decisionOnError, "", err
 	}
+	// if no match is found, skip this authorizer webhook
 	if !matches {
 		return authorizer.DecisionNoOpinion, "", nil
 	}
@@ -297,19 +305,21 @@ func (w *WebhookAuthorizer) RulesFor(user user.Info, namespace string) ([]author
 	return resourceRules, nonResourceRules, incomplete, fmt.Errorf("webhook authorizer does not support user rule resolution")
 }
 
-// Match is used to evaluate the request against the authorizer's cel expression to return match or no match found
+// Match is used to evaluate the SubjectAccessReview against the authorizer's match conditions cel expressions to return match or no match found
 func (w *WebhookAuthorizer) Match(ctx context.Context, r *authorizationv1.SubjectAccessReview) (bool, error) {
-	if r.Spec.ResourceAttributes == nil {
+	if r == nil {
 		return false, nil
 	}
 	// if len(w.matchConditions) > 0 {
 	// 	return false, nil
 	// }
-	expression := "request.name == 'my-pod'"
-	env, err := cel.NewEnv()
+	expression := "review.spec.resourceAttributes.name == 'nn'"
+
+	env, err := buildEnv()
 	if err != nil {
 		return false, err
 	}
+
 	ast, issues := env.Compile(expression)
 	if issues != nil {
 		return false, fmt.Errorf("compilation failed: %s", issues.String())
@@ -330,13 +340,13 @@ func (w *WebhookAuthorizer) Match(ctx context.Context, r *authorizationv1.Subjec
 		// TODO: check failurePolicy
 		return false, fmt.Errorf("program instantiation failed: " + err.Error())
 	}
-	
-	requestVal, err := convertObjectToUnstructured(r.Spec.ResourceAttributes)
+
+	reviewVal, err := convertObjectToUnstructured(r)
 	if err != nil {
 		return false, fmt.Errorf("convert object to unstructured failed: " + err.Error())
 	}
 	input := &evaluationActivation{
-		request: requestVal.Object,
+		review: reviewVal.Object,
 	}
 	klog.Infof("cel input: %v", input)
 	evalResult, evalDetails, err := prog.ContextEval(ctx, input)
@@ -350,6 +360,59 @@ func (w *WebhookAuthorizer) Match(ctx context.Context, r *authorizationv1.Subjec
 	}
 	return true, nil
 }
+
+// buildEnv sets up an environment that contains one variables, "review"
+// review is an object with other objects
+func buildEnv() (*cel.Env, error) {
+	//reviewType := common.SchemaDeclType(reviewMapSchema("review"), true).MaybeAssignTypeName("reviewType")
+	// resourceAttributesType := common.SchemaDeclType(simpleMapSchema("resourceattributes"), true).MaybeAssignTypeName("resourceAttributesType")
+
+	env, err := environment.MustBaseEnvSet(environment.DefaultCompatibilityVersion()).Extend(
+		environment.VersionedOptions{
+			IntroducedVersion: version.MajorMinor(1, 26),
+			EnvOptions: []cel.EnvOption{
+				cel.Variable("review", cel.DynType),
+			},
+			// DeclTypes: []*apiservercel.DeclType{
+			// 	reviewType,
+			// },
+		},
+	)
+	if err != nil {
+		return nil, err
+	}
+	return env.Env(environment.NewExpressions)
+}
+
+// func reviewMapSchema(name string) common.Schema {
+// 	return &openapi.Schema{Schema: &spec.Schema{
+// 		SchemaProps: spec.SchemaProps{
+// 			Type: []string{"object"},
+// 			Properties: map[string]spec.Schema{
+// 				"user":   *spec.StringProperty(),
+// 				"uid":    *spec.StringProperty(),
+// 				"groups": *spec.StringProperty(),
+// 			},
+// 		},
+// 	}}
+// }
+
+// func resourceAttrMapSchema(name string) common.Schema {
+// 	return &openapi.Schema{Schema: &spec.Schema{
+// 		SchemaProps: spec.SchemaProps{
+// 			Type: []string{"object"},
+// 			Properties: map[string]spec.Schema{
+// 				"namespace":   *spec.StringProperty(),
+// 				"verb":        *spec.StringProperty(),
+// 				"group":       *spec.StringProperty(),
+// 				"version":     *spec.StringProperty(),
+// 				"resource":    *spec.StringProperty(),
+// 				"subresource": *spec.StringProperty(),
+// 				"name":        *spec.StringProperty(),
+// 			},
+// 		},
+// 	}}
+// }
 
 func convertObjectToUnstructured(obj interface{}) (*unstructured.Unstructured, error) {
 	if obj == nil || reflect.ValueOf(obj).IsNil() {
