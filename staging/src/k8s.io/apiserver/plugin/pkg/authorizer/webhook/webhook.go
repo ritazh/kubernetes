@@ -310,55 +310,71 @@ func (w *WebhookAuthorizer) Match(ctx context.Context, r *authorizationv1.Subjec
 	if r == nil {
 		return false, nil
 	}
-	// if len(w.matchConditions) > 0 {
-	// 	return false, nil
-	// }
-	expression := "review.spec.resourceAttributes.name == 'nn'"
+	// An empty list of matchConditions matches all requests
+	if len(w.matchConditions) == 0 {
+		return true, nil
+	}
+	// 1. If at least one matchCondition evaluates to FALSE, then the webhook is skipped.
+	// 2. If ALL matchConditions evaluate to TRUE, then the webhook is called.
+	// 3. If at least one matchCondition evaluates to an error (but none are FALSE):
+	//    - If failurePolicy=Deny, then the webhook rejects the request
+	//    - If failurePolicy=NoOpinion, then the error is ignored and the webhook is skipped
+	found := true
+	for _, mc := range w.matchConditions {
+		expression := mc.Expression
+		if len(expression) == 0 {
+			continue
+		}
 
-	env, err := buildEnv()
-	if err != nil {
-		return false, err
-	}
-
-	ast, issues := env.Compile(expression)
-	if issues != nil {
-		return false, fmt.Errorf("compilation failed: %s", issues.String())
-	}
-	if ast.OutputType() != cel.BoolType {
-		return false, fmt.Errorf("cel expression must evaluate to a bool, instead got type: %s", ast.OutputType())
-	}
-	_, err = cel.AstToCheckedExpr(ast)
-	if err != nil {
+		env, err := buildEnv()
 		if err != nil {
-			return false, fmt.Errorf("unexpected compilation error: %v", err)
+			return found, err
+		}
+
+		ast, issues := env.Compile(expression)
+		if issues != nil {
+			return found, fmt.Errorf("compilation failed: %s", issues.String())
+		}
+		if ast.OutputType() != cel.BoolType {
+			return found, fmt.Errorf("cel expression must evaluate to a bool, instead got type: %s", ast.OutputType())
+		}
+		_, err = cel.AstToCheckedExpr(ast)
+		if err != nil {
+			if err != nil {
+				return found, fmt.Errorf("unexpected compilation error: %v", err)
+			}
+		}
+		prog, err := env.Program(ast,
+			cel.InterruptCheckFrequency(celconfig.CheckFrequency),
+		)
+		if err != nil {
+			// TODO: check failurePolicy
+			return found, fmt.Errorf("program instantiation failed: " + err.Error())
+		}
+
+		reviewVal, err := convertObjectToUnstructured(r)
+		if err != nil {
+			return found, fmt.Errorf("convert object to unstructured failed: " + err.Error())
+		}
+		input := &evaluationActivation{
+			review: reviewVal.Object,
+		}
+		klog.Infof("cel input: %v", input)
+		evalResult, evalDetails, err := prog.ContextEval(ctx, input)
+		if err != nil {
+			return found, fmt.Errorf("program eval failed: %v, evalDetails: %v", err, evalDetails)
+		}
+		klog.Infof("expression: %v", expression)
+		klog.Infof("evalResult: %v", evalResult)
+		klog.Infof("evalDetails: %v", evalDetails)
+		if evalResult == celtypes.False {
+			found = false
+			break
+		} else {
+			found = true
 		}
 	}
-	prog, err := env.Program(ast,
-		cel.InterruptCheckFrequency(celconfig.CheckFrequency),
-	)
-	if err != nil {
-		// TODO: check failurePolicy
-		return false, fmt.Errorf("program instantiation failed: " + err.Error())
-	}
-
-	reviewVal, err := convertObjectToUnstructured(r)
-	if err != nil {
-		return false, fmt.Errorf("convert object to unstructured failed: " + err.Error())
-	}
-	input := &evaluationActivation{
-		review: reviewVal.Object,
-	}
-	klog.Infof("cel input: %v", input)
-	evalResult, evalDetails, err := prog.ContextEval(ctx, input)
-	if err != nil {
-		return false, fmt.Errorf("program eval failed: %v, evalDetails: %v", err, evalDetails)
-	}
-	klog.Infof("evalResult: %v", evalResult)
-	klog.Infof("evalDetails: %v", evalDetails)
-	if evalResult == celtypes.False {
-		return false, nil
-	}
-	return true, nil
+	return found, nil
 }
 
 // buildEnv sets up an environment that contains one variables, "review"
@@ -373,9 +389,6 @@ func buildEnv() (*cel.Env, error) {
 			EnvOptions: []cel.EnvOption{
 				cel.Variable("review", cel.DynType),
 			},
-			// DeclTypes: []*apiservercel.DeclType{
-			// 	reviewType,
-			// },
 		},
 	)
 	if err != nil {
@@ -383,36 +396,6 @@ func buildEnv() (*cel.Env, error) {
 	}
 	return env.Env(environment.NewExpressions)
 }
-
-// func reviewMapSchema(name string) common.Schema {
-// 	return &openapi.Schema{Schema: &spec.Schema{
-// 		SchemaProps: spec.SchemaProps{
-// 			Type: []string{"object"},
-// 			Properties: map[string]spec.Schema{
-// 				"user":   *spec.StringProperty(),
-// 				"uid":    *spec.StringProperty(),
-// 				"groups": *spec.StringProperty(),
-// 			},
-// 		},
-// 	}}
-// }
-
-// func resourceAttrMapSchema(name string) common.Schema {
-// 	return &openapi.Schema{Schema: &spec.Schema{
-// 		SchemaProps: spec.SchemaProps{
-// 			Type: []string{"object"},
-// 			Properties: map[string]spec.Schema{
-// 				"namespace":   *spec.StringProperty(),
-// 				"verb":        *spec.StringProperty(),
-// 				"group":       *spec.StringProperty(),
-// 				"version":     *spec.StringProperty(),
-// 				"resource":    *spec.StringProperty(),
-// 				"subresource": *spec.StringProperty(),
-// 				"name":        *spec.StringProperty(),
-// 			},
-// 		},
-// 	}}
-// }
 
 func convertObjectToUnstructured(obj interface{}) (*unstructured.Unstructured, error) {
 	if obj == nil || reflect.ValueOf(obj).IsNil() {

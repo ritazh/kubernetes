@@ -319,7 +319,7 @@ func (m *mockV1Service) HTTPStatusCode() int { return m.statusCode }
 
 // newV1Authorizer creates a temporary kubeconfig file from the provided arguments and attempts to load
 // a new WebhookAuthorizer from it.
-func newV1Authorizer(callbackURL string, clientCert, clientKey, ca []byte, cacheTime time.Duration, metrics AuthorizerMetrics) (*WebhookAuthorizer, error) {
+func newV1Authorizer(callbackURL string, clientCert, clientKey, ca []byte, cacheTime time.Duration, matchConditions []authzconfig.WebhookMatchCondition, metrics AuthorizerMetrics) (*WebhookAuthorizer, error) {
 	tempfile, err := ioutil.TempFile("", "")
 	if err != nil {
 		return nil, err
@@ -349,7 +349,7 @@ func newV1Authorizer(callbackURL string, clientCert, clientKey, ca []byte, cache
 	if err != nil {
 		return nil, fmt.Errorf("error building sar client: %v", err)
 	}
-	return newWithBackoff(sarClient, cacheTime, cacheTime, testRetryBackoff, []authzconfig.WebhookMatchCondition{}, metrics)
+	return newWithBackoff(sarClient, cacheTime, cacheTime, testRetryBackoff, matchConditions, metrics)
 }
 
 func TestV1TLSConfig(t *testing.T) {
@@ -408,7 +408,7 @@ func TestV1TLSConfig(t *testing.T) {
 			}
 			defer server.Close()
 
-			wh, err := newV1Authorizer(server.URL, tt.clientCert, tt.clientKey, tt.clientCA, 0, noopAuthorizerMetrics())
+			wh, err := newV1Authorizer(server.URL, tt.clientCert, tt.clientKey, tt.clientCA, 0, noopAuthorizerMatchConditions(), noopAuthorizerMetrics())
 			if err != nil {
 				t.Errorf("%s: failed to create client: %v", tt.test, err)
 				return
@@ -473,7 +473,7 @@ func TestV1Webhook(t *testing.T) {
 	}
 	defer s.Close()
 
-	wh, err := newV1Authorizer(s.URL, clientCert, clientKey, caCert, 0, noopAuthorizerMetrics())
+	wh, err := newV1Authorizer(s.URL, clientCert, clientKey, caCert, 0, noopAuthorizerMatchConditions(), noopAuthorizerMetrics())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,6 +564,99 @@ func TestV1Webhook(t *testing.T) {
 	}
 }
 
+func TestV1WebhookMatchConditions(t *testing.T) {
+	serv := new(recorderV1Service)
+	s, err := NewV1TestServer(serv, serverCert, serverKey, caCert)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+
+	oneMatchCondition := []authzconfig.WebhookMatchCondition{
+		{
+			Expression: "has(review.spec.user) && review.spec.user == 'jane'",
+			Message:    "request should match on user",
+		},
+	}
+	twoMatchConditions := []authzconfig.WebhookMatchCondition{
+		{
+			Expression: "has(review.spec.user) && review.spec.user == 'jane'",
+			Message:    "request should match on user",
+		},
+		{
+			Expression: "has(review.spec.resourceAttributes) && review.spec.resourceAttributes.name == 'my-pod'",
+			Message:    "request should match on resource name",
+		},
+	}
+
+	tests := []struct {
+		attr             authorizer.Attributes
+		matchConditions  []authzconfig.WebhookMatchCondition
+		expectedDecision authorizer.Decision
+	}{
+		{
+			attr:             authorizer.AttributesRecord{User: &user.DefaultInfo{}},
+			matchConditions:  oneMatchCondition,
+			expectedDecision: authorizer.DecisionNoOpinion,
+		},
+		{
+			attr:             authorizer.AttributesRecord{User: &user.DefaultInfo{Name: "jane"}},
+			matchConditions:  oneMatchCondition,
+			expectedDecision: authorizer.DecisionAllow,
+		},
+		{
+			attr:             authorizer.AttributesRecord{User: &user.DefaultInfo{Name: "jane"}},
+			matchConditions:  twoMatchConditions,
+			expectedDecision: authorizer.DecisionNoOpinion,
+		},
+		{
+			attr:             authorizer.AttributesRecord{User: &user.DefaultInfo{Name: "bob"}},
+			matchConditions:  oneMatchCondition,
+			expectedDecision: authorizer.DecisionNoOpinion,
+		},
+		{
+			attr:             authorizer.AttributesRecord{User: &user.DefaultInfo{Name: "bob"}},
+			matchConditions:  twoMatchConditions,
+			expectedDecision: authorizer.DecisionNoOpinion,
+		},
+		{
+			attr: authorizer.AttributesRecord{
+				User: &user.DefaultInfo{
+					Name:   "jane",
+					UID:    "1",
+					Groups: []string{"group1", "group2"},
+				},
+				Verb:            "GET",
+				Namespace:       "kittensandponies",
+				APIGroup:        "group3",
+				APIVersion:      "v7beta3",
+				Resource:        "pods",
+				Subresource:     "proxy",
+				Name:            "my-pod",
+				ResourceRequest: true,
+				Path:            "/foo",
+			},
+			matchConditions:  twoMatchConditions,
+			expectedDecision: authorizer.DecisionAllow,
+		},
+	}
+
+	for i, tt := range tests {
+		wh, err := newV1Authorizer(s.URL, clientCert, clientKey, caCert, 0, tt.matchConditions, noopAuthorizerMetrics())
+		if err != nil {
+			t.Fatal(err)
+		}
+		decision, _, err := wh.Authorize(context.Background(), tt.attr)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if decision != tt.expectedDecision {
+			t.Errorf("case %d: got decision != want:\n%s", i, cmp.Diff(decision, tt.expectedDecision))
+			continue
+		}
+	}
+}
+
 // TestWebhookCache verifies that error responses from the server are not
 // cached, but successful responses are.
 func TestV1WebhookCache(t *testing.T) {
@@ -575,7 +668,7 @@ func TestV1WebhookCache(t *testing.T) {
 	defer s.Close()
 
 	// Create an authorizer that caches successful responses "forever" (100 days).
-	wh, err := newV1Authorizer(s.URL, clientCert, clientKey, caCert, 2400*time.Hour, noopAuthorizerMetrics())
+	wh, err := newV1Authorizer(s.URL, clientCert, clientKey, caCert, 2400*time.Hour, noopAuthorizerMatchConditions(), noopAuthorizerMetrics())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -671,4 +764,8 @@ func noopAuthorizerMetrics() AuthorizerMetrics {
 		RecordRequestTotal:   noopMetrics{}.RecordRequestTotal,
 		RecordRequestLatency: noopMetrics{}.RecordRequestLatency,
 	}
+}
+
+func noopAuthorizerMatchConditions() []authzconfig.WebhookMatchCondition {
+	return []authzconfig.WebhookMatchCondition{}
 }
