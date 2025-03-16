@@ -27,6 +27,7 @@ import (
 	"k8s.io/apiserver/pkg/storage/names"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/fake"
+	testclient "k8s.io/client-go/testing"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
@@ -131,10 +132,10 @@ var ns1 = &corev1.Namespace{
 var ns2 = &corev1.Namespace{
 	ObjectMeta: metav1.ObjectMeta{
 		Name:   "kube-system",
-		Labels: map[string]string{resource.DRAAdminNamespaceLabel: "true"},
+		Labels: map[string]string{resource.DRAAdminNamespaceLabelKey: "true"},
 	},
 }
-var adminAccessError = "Forbidden: admin access to devices is not allowed in namespace without Resource Admin Access label"
+var adminAccessError = "Forbidden: admin access to devices is not allowed in namespace without the `resource.k8s.io/admin-access: true` label"
 var fieldImmutableError = "field is immutable"
 var metadataError = "a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters"
 var deviceRequestError = "exactly one of `deviceClassName` or `firstAvailable` must be specified"
@@ -154,18 +155,6 @@ func TestClaimTemplateStrategy(t *testing.T) {
 
 func TestClaimTemplateStrategyCreate(t *testing.T) {
 	ctx := genericapirequest.NewDefaultContext()
-	fakeClient := fake.NewSimpleClientset(ns1, ns2)
-	mockNSClient := fakeClient.CoreV1().Namespaces()
-	defaultNs, err := mockNSClient.Get(ctx, "default", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("expected default namespace, got %v", err)
-	}
-	assert.Equal(t, ns1, defaultNs)
-	adminNs, err := mockNSClient.Get(ctx, "kube-system", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("expected admin namespace, got %v", err)
-	}
-	assert.Equal(t, ns2, adminNs)
 
 	testcases := map[string]struct {
 		obj                   *resource.ResourceClaimTemplate
@@ -173,10 +162,16 @@ func TestClaimTemplateStrategyCreate(t *testing.T) {
 		expectValidationError string
 		prioritizedList       bool
 		expectObj             *resource.ResourceClaimTemplate
+		verify                func(*testing.T, []testclient.Action)
 	}{
 		"simple": {
 			obj:       obj,
 			expectObj: obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"validation-error": {
 			obj: func() *resource.ResourceClaimTemplate {
@@ -185,42 +180,94 @@ func TestClaimTemplateStrategyCreate(t *testing.T) {
 				return obj
 			}(),
 			expectValidationError: metadataError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-fields-admin-access": {
 			obj:         objWithAdminAccess,
 			adminAccess: false,
 			expectObj:   obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-admin-access": {
 			obj:         objWithAdminAccess,
 			adminAccess: true,
 			expectObj:   objWithAdminAccess,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "kube-system" {
+					t.Errorf("expected to get the kube-system namespace but got '%s'", ns)
+				}
+			},
 		},
 		"drop-fields-prioritized-list": {
 			obj:                   objWithPrioritizedList,
 			prioritizedList:       false,
 			expectValidationError: deviceRequestError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-prioritized-list": {
 			obj:             objWithPrioritizedList,
 			prioritizedList: true,
 			expectObj:       objWithPrioritizedList,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"admin-access-admin-namespace": {
 			obj:         objWithAdminAccess,
 			adminAccess: true,
 			expectObj:   objWithAdminAccess,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "kube-system" {
+					t.Errorf("expected to get the kube-system namespace but got '%s'", ns)
+				}
+			},
 		},
 		"admin-access-non-admin-namespace": {
 			obj:                   objWithAdminAccessInNonAdminNamespace,
 			adminAccess:           true,
 			expectObj:             objWithAdminAccessInNonAdminNamespace,
 			expectValidationError: adminAccessError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "default" {
+					t.Errorf("expected to get the default namespace but got '%s'", ns)
+				}
+			},
 		},
 	}
 
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
+			fakeClient := fake.NewSimpleClientset(ns1, ns2)
+			mockNSClient := fakeClient.CoreV1().Namespaces()
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAPrioritizedList, tc.prioritizedList)
 			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
@@ -239,6 +286,7 @@ func TestClaimTemplateStrategyCreate(t *testing.T) {
 			}
 			strategy.Canonicalize(obj)
 			assert.Equal(t, tc.expectObj, obj)
+			tc.verify(t, fakeClient.Actions())
 		})
 	}
 }
@@ -248,16 +296,7 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 		ctx := genericapirequest.NewDefaultContext()
 		fakeClient := fake.NewSimpleClientset(ns1, ns2)
 		mockNSClient := fakeClient.CoreV1().Namespaces()
-		defaultNs, err := mockNSClient.Get(ctx, "default", metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("expected default namespace, got %v", err)
-		}
-		assert.Equal(t, ns1, defaultNs)
-		adminNs, err := mockNSClient.Get(ctx, "kube-system", metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("expected admin namespace, got %v", err)
-		}
-		assert.Equal(t, ns2, adminNs)
+
 		strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
 		resourceClaimTemplate := obj.DeepCopy()
 		newClaimTemplate := resourceClaimTemplate.DeepCopy()
@@ -268,22 +307,15 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 		if len(errs) != 0 {
 			t.Errorf("unexpected validation errors: %v", errs)
 		}
+		if len(fakeClient.Actions()) != 0 {
+			t.Errorf("expected no action to be taken")
+		}
 	})
 
 	t.Run("name-change-not-allowed", func(t *testing.T) {
 		ctx := genericapirequest.NewDefaultContext()
 		fakeClient := fake.NewSimpleClientset(ns1, ns2)
 		mockNSClient := fakeClient.CoreV1().Namespaces()
-		defaultNs, err := mockNSClient.Get(ctx, "default", metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("expected default namespace, got %v", err)
-		}
-		assert.Equal(t, ns1, defaultNs)
-		adminNs, err := mockNSClient.Get(ctx, "kube-system", metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("expected admin namespace, got %v", err)
-		}
-		assert.Equal(t, ns2, adminNs)
 		strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
 		resourceClaimTemplate := obj.DeepCopy()
 		newClaimTemplate := resourceClaimTemplate.DeepCopy()
@@ -295,6 +327,9 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 		if len(errs) == 0 {
 			t.Errorf("expected a validation error")
 		}
+		if len(fakeClient.Actions()) != 0 {
+			t.Errorf("expected no action to be taken")
+		}
 	})
 
 	t.Run("adminaccess-update-not-allowed", func(t *testing.T) {
@@ -302,16 +337,6 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 		ctx := genericapirequest.NewDefaultContext()
 		fakeClient := fake.NewSimpleClientset(ns1, ns2)
 		mockNSClient := fakeClient.CoreV1().Namespaces()
-		defaultNs, err := mockNSClient.Get(ctx, "default", metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("expected default namespace, got %v", err)
-		}
-		assert.Equal(t, ns1, defaultNs)
-		adminNs, err := mockNSClient.Get(ctx, "kube-system", metav1.GetOptions{})
-		if err != nil {
-			t.Fatalf("expected admin namespace, got %v", err)
-		}
-		assert.Equal(t, ns2, adminNs)
 		strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
 		resourceClaimTemplate := obj.DeepCopy()
 		newClaimTemplate := resourceClaimTemplate.DeepCopy()
@@ -320,10 +345,15 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 
 		strategy.PrepareForUpdate(ctx, newClaimTemplate, resourceClaimTemplate)
 		errs := strategy.ValidateUpdate(ctx, newClaimTemplate, resourceClaimTemplate)
+		if len(errs) != 0 {
+			assert.ErrorContains(t, errs[0], fieldImmutableError, "the error message should have contained the expected error message")
+			return
+		}
 		if len(errs) == 0 {
 			t.Errorf("expected a validation error")
-		} else {
-			assert.ErrorContains(t, errs[0], fieldImmutableError, "the error message should have contained the expected error message")
+		}
+		if len(fakeClient.Actions()) != 0 {
+			t.Errorf("expected no action to be taken")
 		}
 	})
 }

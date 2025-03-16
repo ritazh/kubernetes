@@ -261,7 +261,7 @@ func testAdminAccess(tCtx ktesting.TContext, adminAccessEnabled bool) {
 	if adminAccessEnabled {
 		if err != nil {
 			// should result in validation error
-			assert.ErrorContains(tCtx, err, "admin access to devices is not allowed in namespace without Resource Admin Access label", "the error message should have contained the expected error message")
+			assert.ErrorContains(tCtx, err, "admin access to devices is not allowed in namespace without the `resource.k8s.io/admin-access: true` label", "the error message should have contained the expected error message")
 			return
 		} else {
 			tCtx.Fatal("expected validation error(s), got none")
@@ -289,7 +289,7 @@ func testPrioritizedList(tCtx ktesting.TContext, enabled bool) {
 	tCtx.Parallel()
 	_, err := tCtx.Client().ResourceV1beta1().DeviceClasses().Create(tCtx, class, metav1.CreateOptions{})
 	tCtx.ExpectNoError(err, "create class")
-	namespace := createTestNamespace(tCtx)
+	namespace := createTestNamespace(tCtx, nil)
 	claim := claimPrioritizedList.DeepCopy()
 	claim.Namespace = namespace
 	claim, err = tCtx.Client().ResourceV1beta1().ResourceClaims(namespace).Create(tCtx, claim, metav1.CreateOptions{})

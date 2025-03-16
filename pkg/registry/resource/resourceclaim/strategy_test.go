@@ -27,6 +27,7 @@ import (
 	"k8s.io/apiserver/pkg/storage/names"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/fake"
+	testclient "k8s.io/client-go/testing"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
@@ -183,7 +184,6 @@ var objWithAdminAccessStatusInNonAdminNamespace = &resource.ResourceClaim{
 					Name:            "req-0",
 					DeviceClassName: "class",
 					AllocationMode:  resource.DeviceAllocationModeAll,
-					AdminAccess:     ptr.To(true),
 				},
 			},
 		},
@@ -272,11 +272,11 @@ var ns1 = &corev1.Namespace{
 var ns2 = &corev1.Namespace{
 	ObjectMeta: metav1.ObjectMeta{
 		Name:   "kube-system",
-		Labels: map[string]string{resource.DRAAdminNamespaceLabel: "true"},
+		Labels: map[string]string{resource.DRAAdminNamespaceLabelKey: "true"},
 	},
 }
 
-var adminAccessError = "Forbidden: admin access to devices is not allowed in namespace without Resource Admin Access label"
+var adminAccessError = "Forbidden: admin access to devices is not allowed in namespace without the `resource.k8s.io/admin-access: true` label"
 var fieldImmutableError = "field is immutable"
 var metadataError = "a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters"
 var deviceRequestError = "exactly one of `deviceClassName` or `firstAvailable` must be specified"
@@ -302,28 +302,22 @@ func TestStrategy(t *testing.T) {
 
 func TestStrategyCreate(t *testing.T) {
 	ctx := genericapirequest.NewDefaultContext()
-	fakeClient := fake.NewSimpleClientset(ns1, ns2)
-	mockNSClient := fakeClient.CoreV1().Namespaces()
-	defaultNs, err := mockNSClient.Get(ctx, "default", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("expected default namespace, got %v", err)
-	}
-	assert.Equal(t, ns1, defaultNs)
-	adminNs, err := mockNSClient.Get(ctx, "kube-system", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("expected admin namespace, got %v", err)
-	}
-	assert.Equal(t, ns2, adminNs)
 	testcases := map[string]struct {
 		obj                   *resource.ResourceClaim
 		adminAccess           bool
 		prioritizedList       bool
 		expectValidationError string
 		expectObj             *resource.ResourceClaim
+		verify                func(*testing.T, []testclient.Action)
 	}{
 		"simple": {
 			obj:       obj,
 			expectObj: obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"validation-error": {
 			obj: func() *resource.ResourceClaim {
@@ -332,42 +326,95 @@ func TestStrategyCreate(t *testing.T) {
 				return obj
 			}(),
 			expectValidationError: metadataError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-fields-admin-access": {
 			obj:         objWithAdminAccess,
 			adminAccess: false,
 			expectObj:   obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-admin-access": {
 			obj:         objWithAdminAccess,
 			adminAccess: true,
 			expectObj:   objWithAdminAccess,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "kube-system" {
+					t.Errorf("expected to get the kube-system namespace but got '%s'", ns)
+				}
+			},
 		},
 		"drop-fields-prioritized-list": {
 			obj:                   objWithPrioritizedList,
 			prioritizedList:       false,
 			expectValidationError: deviceRequestError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-prioritized-list": {
 			obj:             objWithPrioritizedList,
 			prioritizedList: true,
 			expectObj:       objWithPrioritizedList,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"admin-access-admin-namespace": {
 			obj:         objWithAdminAccess,
 			adminAccess: true,
 			expectObj:   objWithAdminAccess,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "kube-system" {
+					t.Errorf("expected to get the kube-system namespace but got '%s'", ns)
+				}
+			},
 		},
 		"admin-access-non-admin-namespace": {
 			obj:                   objWithAdminAccessInNonAdminNamespace,
 			adminAccess:           true,
 			expectObj:             objWithAdminAccessInNonAdminNamespace,
 			expectValidationError: adminAccessError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "default" {
+					t.Errorf("expected to get the default namespace but got '%s'", ns)
+				}
+			},
 		},
 	}
 
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
+			fakeClient := fake.NewSimpleClientset(ns1, ns2)
+			mockNSClient := fakeClient.CoreV1().Namespaces()
+
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAPrioritizedList, tc.prioritizedList)
 			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
@@ -386,24 +433,13 @@ func TestStrategyCreate(t *testing.T) {
 			}
 			strategy.Canonicalize(obj)
 			assert.Equal(t, tc.expectObj, obj)
+			tc.verify(t, fakeClient.Actions())
 		})
 	}
 }
 
 func TestStrategyUpdate(t *testing.T) {
 	ctx := genericapirequest.NewDefaultContext()
-	fakeClient := fake.NewSimpleClientset(ns1, ns2)
-	mockNSClient := fakeClient.CoreV1().Namespaces()
-	defaultNs, err := mockNSClient.Get(ctx, "default", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("expected default namespace, got %v", err)
-	}
-	assert.Equal(t, ns1, defaultNs)
-	adminNs, err := mockNSClient.Get(ctx, "kube-system", metav1.GetOptions{})
-	if err != nil {
-		t.Fatalf("expected admin namespace, got %v", err)
-	}
-	assert.Equal(t, ns2, adminNs)
 	testcases := map[string]struct {
 		oldObj                *resource.ResourceClaim
 		newObj                *resource.ResourceClaim
@@ -411,11 +447,17 @@ func TestStrategyUpdate(t *testing.T) {
 		expectValidationError string
 		prioritizedList       bool
 		expectObj             *resource.ResourceClaim
+		verify                func(*testing.T, []testclient.Action)
 	}{
 		"no-changes-okay": {
 			oldObj:    obj,
 			newObj:    obj,
 			expectObj: obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"name-change-not-allowed": {
 			oldObj: obj,
@@ -425,65 +467,118 @@ func TestStrategyUpdate(t *testing.T) {
 				return obj
 			}(),
 			expectValidationError: fieldImmutableError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-fields-admin-access": {
 			oldObj:      obj,
 			newObj:      objWithAdminAccess,
 			adminAccess: false,
 			expectObj:   obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-admin-access": {
 			oldObj:                obj,
 			newObj:                objWithAdminAccess,
 			adminAccess:           true,
 			expectValidationError: fieldImmutableError, // Spec is immutable.
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-existing-fields-admin-access": {
 			oldObj:      objWithAdminAccess,
 			newObj:      objWithAdminAccess,
 			adminAccess: true,
 			expectObj:   objWithAdminAccess,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"admin-access-admin-namespace": {
 			oldObj:      objWithAdminAccess,
 			newObj:      objWithAdminAccess,
 			adminAccess: true,
 			expectObj:   objWithAdminAccess,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"admin-access-non-admin-namespace": {
 			oldObj:                objInNonAdminNamespace,
 			newObj:                objWithAdminAccessInNonAdminNamespace,
 			adminAccess:           true,
 			expectValidationError: fieldImmutableError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-fields-prioritized-list": {
 			oldObj:                obj,
 			newObj:                objWithPrioritizedList,
 			prioritizedList:       false,
 			expectValidationError: deviceRequestError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-prioritized-list": {
 			oldObj:                obj,
 			newObj:                objWithPrioritizedList,
 			prioritizedList:       true,
 			expectValidationError: fieldImmutableError, // Spec is immutable.
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-existing-fields-prioritized-list": {
 			oldObj:          objWithPrioritizedList,
 			newObj:          objWithPrioritizedList,
 			prioritizedList: true,
 			expectObj:       objWithPrioritizedList,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-existing-fields-prioritized-list-disabled-feature": {
 			oldObj:          objWithPrioritizedList,
 			newObj:          objWithPrioritizedList,
 			prioritizedList: false,
 			expectObj:       objWithPrioritizedList,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 	}
 
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
+			fakeClient := fake.NewSimpleClientset(ns1, ns2)
+			mockNSClient := fakeClient.CoreV1().Namespaces()
+
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
 			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAPrioritizedList, tc.prioritizedList)
@@ -504,20 +599,16 @@ func TestStrategyUpdate(t *testing.T) {
 				t.Fatalf("unexpected warnings: %q", warnings)
 			}
 			strategy.Canonicalize(newObj)
-
 			expectObj := tc.expectObj.DeepCopy()
 			expectObj.ResourceVersion = "4"
 			assert.Equal(t, expectObj, newObj)
+			tc.verify(t, fakeClient.Actions())
 		})
 	}
 }
 
 func TestStatusStrategyUpdate(t *testing.T) {
 	ctx := genericapirequest.NewDefaultContext()
-	fakeClient := fake.NewSimpleClientset()
-	mockNSClient := fakeClient.CoreV1().Namespaces()
-	strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
-
 	testcases := map[string]struct {
 		oldObj                  *resource.ResourceClaim
 		newObj                  *resource.ResourceClaim
@@ -525,11 +616,17 @@ func TestStatusStrategyUpdate(t *testing.T) {
 		deviceStatusFeatureGate bool
 		expectValidationError   string
 		expectObj               *resource.ResourceClaim
+		verify                  func(*testing.T, []testclient.Action)
 	}{
 		"no-changes-okay": {
 			oldObj:    obj,
 			newObj:    obj,
 			expectObj: obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"name-change-not-allowed": {
 			oldObj: obj,
@@ -539,6 +636,11 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				return obj
 			}(),
 			expectValidationError: fieldImmutableError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		// Cannot add finalizers, annotations and labels during status update.
 		"drop-meta-changes": {
@@ -551,12 +653,22 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				return obj
 			}(),
 			expectObj: obj,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-fields-admin-access": {
 			oldObj:      obj,
 			newObj:      objWithAdminAccessStatus,
 			adminAccess: false,
 			expectObj:   objWithStatus,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-admin-access": {
 			oldObj:      obj,
@@ -568,18 +680,43 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				expectObj.Spec = obj.Spec
 				return expectObj
 			}(),
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "kube-system" {
+					t.Errorf("expected to get the kube-system namespace but got '%s'", ns)
+				}
+			},
 		},
 		"keep-fields-admin-access-NonAdminNamespace": {
 			oldObj:                objStatusInNonAdminNamespace,
 			newObj:                objWithAdminAccessStatusInNonAdminNamespace,
 			adminAccess:           true,
-			expectValidationError: fieldImmutableError,
+			expectValidationError: adminAccessError,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "default" {
+					t.Errorf("expected to get the default namespace but got '%s'", ns)
+				}
+			},
 		},
 		"keep-fields-admin-access-because-of-spec": {
 			oldObj:      objWithAdminAccess,
 			newObj:      objWithAdminAccessStatus,
 			adminAccess: false,
 			expectObj:   objWithAdminAccessStatus,
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		// Normally a claim without admin access in the spec shouldn't
 		// have one in the status either, but it's not invalid and thus
@@ -597,6 +734,11 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				oldObj.Spec.Devices.Requests[0].AdminAccess = ptr.To(false)
 				return oldObj
 			}(),
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-fields-devices-status": {
 			oldObj: func() *resource.ResourceClaim {
@@ -619,6 +761,11 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				addStatusAllocationDevicesResults(obj, testDriver, testPool, testDevice, testRequest)
 				return obj
 			}(),
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-devices-status-disable-feature-gate": {
 			oldObj: func() *resource.ResourceClaim {
@@ -643,6 +790,11 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				addStatusDevices(obj, testDriver, testPool, testDevice)
 				return obj
 			}(),
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"keep-fields-devices-status": {
 			oldObj: func() *resource.ResourceClaim {
@@ -666,6 +818,11 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				addStatusDevices(obj, testDriver, testPool, testDevice)
 				return obj
 			}(),
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-status-deallocated-device": {
 			oldObj: func() *resource.ResourceClaim {
@@ -687,6 +844,11 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				addSpecDevicesRequest(obj, testRequest)
 				return obj
 			}(),
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 		"drop-status-deallocated-device-disable-feature-gate": {
 			oldObj: func() *resource.ResourceClaim {
@@ -708,11 +870,20 @@ func TestStatusStrategyUpdate(t *testing.T) {
 				addSpecDevicesRequest(obj, testRequest)
 				return obj
 			}(),
+			verify: func(t *testing.T, as []testclient.Action) {
+				if len(as) != 0 {
+					t.Errorf("expected no action to be taken")
+				}
+			},
 		},
 	}
 
 	for name, tc := range testcases {
 		t.Run(name, func(t *testing.T) {
+			fakeClient := fake.NewSimpleClientset(ns1, ns2)
+			mockNSClient := fakeClient.CoreV1().Namespaces()
+			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAResourceClaimDeviceStatus, tc.deviceStatusFeatureGate)
 			statusStrategy := NewStatusStrategy(strategy)
@@ -737,6 +908,7 @@ func TestStatusStrategyUpdate(t *testing.T) {
 			expectObj := tc.expectObj.DeepCopy()
 			expectObj.ResourceVersion = "4"
 			assert.Equal(t, expectObj, newObj)
+			tc.verify(t, fakeClient.Actions())
 		})
 	}
 }

@@ -23,9 +23,7 @@ import (
 	"k8s.io/apiserver/pkg/registry/rest"
 	genericapiserver "k8s.io/apiserver/pkg/server"
 	serverstorage "k8s.io/apiserver/pkg/server/storage"
-	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/typed/core/v1"
-	restclient "k8s.io/client-go/rest"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
 	deviceclassstore "k8s.io/kubernetes/pkg/registry/resource/deviceclass/storage"
@@ -39,25 +37,21 @@ import (
 // while their feature is off to allow cleaning them up.
 
 type RESTStorageProvider struct {
-	LoopbackClientConfig *restclient.Config
+	NamespaceClient v1.NamespaceInterface
 }
 
 func (p RESTStorageProvider) NewRESTStorage(apiResourceConfigSource serverstorage.APIResourceConfigSource, restOptionsGetter generic.RESTOptionsGetter) (genericapiserver.APIGroupInfo, error) {
-	client, err := kubernetes.NewForConfig(p.LoopbackClientConfig)
-	if err != nil {
-		return genericapiserver.APIGroupInfo{}, err
-	}
 	apiGroupInfo := genericapiserver.NewDefaultAPIGroupInfo(resource.GroupName, legacyscheme.Scheme, legacyscheme.ParameterCodec, legacyscheme.Codecs)
 	// If you add a version here, be sure to add an entry in `k8s.io/kubernetes/cmd/kube-apiserver/app/aggregator.go with specific priorities.
 	// TODO refactor the plumbing to provide the information in the APIGroupInfo
 
-	if storageMap, err := p.v1alpha3Storage(apiResourceConfigSource, restOptionsGetter, client.CoreV1().Namespaces()); err != nil {
+	if storageMap, err := p.v1alpha3Storage(apiResourceConfigSource, restOptionsGetter, p.NamespaceClient); err != nil {
 		return genericapiserver.APIGroupInfo{}, err
 	} else if len(storageMap) > 0 {
 		apiGroupInfo.VersionedResourcesStorageMap[resourcev1alpha3.SchemeGroupVersion.Version] = storageMap
 	}
 
-	if storageMap, err := p.v1beta1Storage(apiResourceConfigSource, restOptionsGetter, client.CoreV1().Namespaces()); err != nil {
+	if storageMap, err := p.v1beta1Storage(apiResourceConfigSource, restOptionsGetter, p.NamespaceClient); err != nil {
 		return genericapiserver.APIGroupInfo{}, err
 	} else if len(storageMap) > 0 {
 		apiGroupInfo.VersionedResourcesStorageMap[resourcev1beta1.SchemeGroupVersion.Version] = storageMap

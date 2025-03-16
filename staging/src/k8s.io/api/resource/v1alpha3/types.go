@@ -381,7 +381,15 @@ const (
 	DeviceRequestsMaxSize    = AllocationResultsMaxSize
 	DeviceConstraintsMaxSize = 32
 	DeviceConfigMaxSize      = 32
-	DRAAdminNamespaceLabel   = "resource.k8s.io/admin-access"
+)
+
+// DRAAdminNamespaceLabelKey is a label key used to grant administrative access
+// to certain resource.k8s.io API types within a namespace. When this label is
+// set on a namespace with the value "true" (case-sensitive), it allows the use
+// of adminAccess: true in any namespaced resource.k8s.io API types. Currently,
+// this permission applies to ResourceClaim and ResourceClaimTemplate objects.
+const (
+	DRAAdminNamespaceLabelKey = "resource.k8s.io/admin-access"
 )
 
 // DeviceRequest is a request for devices required for a claim.

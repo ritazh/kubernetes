@@ -35,6 +35,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/apis/resource/validation"
 	"k8s.io/kubernetes/pkg/features"
+	resourceutils "k8s.io/kubernetes/pkg/registry/resource"
 	"sigs.k8s.io/structured-merge-diff/v4/fieldpath"
 )
 
@@ -85,7 +86,7 @@ func (*resourceclaimStrategy) PrepareForCreate(ctx context.Context, obj runtime.
 func (s *resourceclaimStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
 	claim := obj.(*resource.ResourceClaim)
 
-	allErrs := validation.AuthorizedForAdmin(ctx, claim.Spec.Devices.Requests, claim.Namespace, s.nsClient)
+	allErrs := resourceutils.AuthorizedForAdmin(ctx, claim.Spec.Devices.Requests, claim.Namespace, s.nsClient, nil)
 	return append(allErrs, validation.ValidateResourceClaim(claim)...)
 }
 
@@ -111,6 +112,7 @@ func (*resourceclaimStrategy) PrepareForUpdate(ctx context.Context, obj, old run
 func (s *resourceclaimStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
 	newClaim := obj.(*resource.ResourceClaim)
 	oldClaim := old.(*resource.ResourceClaim)
+	// AuthorizedForAdmin isn't needed here because the spec is immutable.
 	errorList := validation.ValidateResourceClaim(newClaim)
 	return append(errorList, validation.ValidateResourceClaimUpdate(newClaim, oldClaim)...)
 }
@@ -160,7 +162,7 @@ func (*resourceclaimStatusStrategy) PrepareForUpdate(ctx context.Context, obj, o
 func (r *resourceclaimStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
 	newClaim := obj.(*resource.ResourceClaim)
 	oldClaim := old.(*resource.ResourceClaim)
-	allErrs := validation.AuthorizedForAdmin(ctx, newClaim.Spec.Devices.Requests, newClaim.Namespace, r.nsClient)
+	allErrs := resourceutils.AuthorizedForAdminStatus(ctx, newClaim.Status, newClaim.Namespace, r.nsClient)
 	return append(allErrs, validation.ValidateResourceClaimStatusUpdate(newClaim, oldClaim)...)
 }
 

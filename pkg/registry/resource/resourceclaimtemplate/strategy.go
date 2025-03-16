@@ -31,6 +31,7 @@ import (
 	"k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/apis/resource/validation"
 	"k8s.io/kubernetes/pkg/features"
+	resourceutils "k8s.io/kubernetes/pkg/registry/resource"
 )
 
 // resourceClaimTemplateStrategy implements behavior for ResourceClaimTemplate objects
@@ -60,7 +61,7 @@ func (*resourceClaimTemplateStrategy) PrepareForCreate(ctx context.Context, obj 
 
 func (s *resourceClaimTemplateStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
 	resourceClaimTemplate := obj.(*resource.ResourceClaimTemplate)
-	allErrs := validation.AuthorizedForAdmin(ctx, resourceClaimTemplate.Spec.Spec.Devices.Requests, resourceClaimTemplate.Namespace, s.nsClient)
+	allErrs := resourceutils.AuthorizedForAdmin(ctx, resourceClaimTemplate.Spec.Spec.Devices.Requests, resourceClaimTemplate.Namespace, s.nsClient, nil)
 	return append(allErrs, validation.ValidateResourceClaimTemplate(resourceClaimTemplate)...)
 }
 
@@ -81,6 +82,7 @@ func (*resourceClaimTemplateStrategy) PrepareForUpdate(ctx context.Context, obj,
 }
 
 func (s *resourceClaimTemplateStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
+	// AuthorizedForAdmin isn't needed here because the spec is immutable.
 	errorList := validation.ValidateResourceClaimTemplate(obj.(*resource.ResourceClaimTemplate))
 	return append(errorList, validation.ValidateResourceClaimTemplateUpdate(obj.(*resource.ResourceClaimTemplate), old.(*resource.ResourceClaimTemplate))...)
 }

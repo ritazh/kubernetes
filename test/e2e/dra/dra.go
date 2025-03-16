@@ -1381,7 +1381,7 @@ var _ = framework.SIGDescribe("node")("DRA", feature.DynamicResourceAllocation, 
 			claim.Spec.Devices.Requests[0].AdminAccess = ptr.To(true)
 			_, claimTemplate := b.podInline()
 			claimTemplate.Spec.Spec.Devices.Requests[0].AdminAccess = ptr.To(true)
-			matchValidationError := gomega.MatchError(gomega.ContainSubstring("admin access to devices is not allowed in namespace without Resource Admin Access label"))
+			matchValidationError := gomega.MatchError(gomega.ContainSubstring("admin access to devices is not allowed in namespace without the `resource.k8s.io/admin-access: true` label"))
 			gomega.Eventually(ctx, func(ctx context.Context) error {
 				// First delete, in case that it succeeded earlier.
 				if err := b.f.ClientSet.ResourceV1beta1().ResourceClaims(b.f.Namespace.Name).Delete(ctx, claim.Name, metav1.DeleteOptions{}); err != nil && !apierrors.IsNotFound(err) {
