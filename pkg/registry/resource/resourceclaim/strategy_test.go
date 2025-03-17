@@ -24,12 +24,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/apiserver/pkg/storage/names"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/fake"
 	testclient "k8s.io/client-go/testing"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/utils/ptr"
@@ -276,7 +274,7 @@ var ns2 = &corev1.Namespace{
 	},
 }
 
-var adminAccessError = "Forbidden: admin access to devices is not allowed in namespace without the `resource.k8s.io/admin-access: true` label"
+var adminAccessError = "Forbidden: admin access to devices requires the `resource.k8s.io/admin-access: true` label"
 var fieldImmutableError = "field is immutable"
 var metadataError = "a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters"
 var deviceRequestError = "exactly one of `deviceClassName` or `firstAvailable` must be specified"
@@ -291,7 +289,7 @@ const (
 func TestStrategy(t *testing.T) {
 	fakeClient := fake.NewSimpleClientset()
 	mockNSClient := fakeClient.CoreV1().Namespaces()
-	strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+	strategy := NewStrategy(mockNSClient)
 	if !strategy.NamespaceScoped() {
 		t.Errorf("ResourceClaim must be namespace scoped")
 	}
@@ -417,7 +415,7 @@ func TestStrategyCreate(t *testing.T) {
 
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAPrioritizedList, tc.prioritizedList)
-			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+			strategy := NewStrategy(mockNSClient)
 
 			obj := tc.obj.DeepCopy()
 			strategy.PrepareForCreate(ctx, obj)
@@ -580,7 +578,7 @@ func TestStrategyUpdate(t *testing.T) {
 			mockNSClient := fakeClient.CoreV1().Namespaces()
 
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
-			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+			strategy := NewStrategy(mockNSClient)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAPrioritizedList, tc.prioritizedList)
 
 			oldObj := tc.oldObj.DeepCopy()
@@ -713,8 +711,13 @@ func TestStatusStrategyUpdate(t *testing.T) {
 			adminAccess: false,
 			expectObj:   objWithAdminAccessStatus,
 			verify: func(t *testing.T, as []testclient.Action) {
-				if len(as) != 0 {
-					t.Errorf("expected no action to be taken")
+				if len(as) != 1 {
+					t.Errorf("expected one action but got %d", len(as))
+					return
+				}
+				ns := as[0].(testclient.GetAction).GetName()
+				if ns != "kube-system" {
+					t.Errorf("expected to get the kube-system namespace but got '%s'", ns)
 				}
 			},
 		},
@@ -882,7 +885,7 @@ func TestStatusStrategyUpdate(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			fakeClient := fake.NewSimpleClientset(ns1, ns2)
 			mockNSClient := fakeClient.CoreV1().Namespaces()
-			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+			strategy := NewStrategy(mockNSClient)
 
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAResourceClaimDeviceStatus, tc.deviceStatusFeatureGate)

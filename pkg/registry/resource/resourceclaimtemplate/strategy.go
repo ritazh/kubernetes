@@ -28,6 +28,7 @@ import (
 	"k8s.io/apiserver/pkg/storage/names"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/typed/core/v1"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/apis/resource/validation"
 	"k8s.io/kubernetes/pkg/features"
@@ -42,10 +43,10 @@ type resourceClaimTemplateStrategy struct {
 }
 
 // NewStrategy is the default logic that applies when creating and updating ResourceClaimTemplate objects.
-func NewStrategy(ro runtime.ObjectTyper, ng names.NameGenerator, nsClient v1.NamespaceInterface) *resourceClaimTemplateStrategy {
+func NewStrategy(nsClient v1.NamespaceInterface) *resourceClaimTemplateStrategy {
 	return &resourceClaimTemplateStrategy{
-		ro,
-		ng,
+		legacyscheme.Scheme,
+		names.SimpleNameGenerator,
 		nsClient,
 	}
 }
@@ -61,7 +62,7 @@ func (*resourceClaimTemplateStrategy) PrepareForCreate(ctx context.Context, obj 
 
 func (s *resourceClaimTemplateStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
 	resourceClaimTemplate := obj.(*resource.ResourceClaimTemplate)
-	allErrs := resourceutils.AuthorizedForAdmin(ctx, resourceClaimTemplate.Spec.Spec.Devices.Requests, resourceClaimTemplate.Namespace, s.nsClient, nil)
+	allErrs := resourceutils.AuthorizedForAdmin(ctx, resourceClaimTemplate.Spec.Spec.Devices.Requests, resourceClaimTemplate.Namespace, s.nsClient)
 	return append(allErrs, validation.ValidateResourceClaimTemplate(resourceClaimTemplate)...)
 }
 

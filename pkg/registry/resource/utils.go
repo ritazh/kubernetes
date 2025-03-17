@@ -22,22 +22,16 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/validation/field"
-	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	v1 "k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/kubernetes/pkg/apis/resource"
-	"k8s.io/kubernetes/pkg/features"
 )
 
 // AuthorizedForAdmin checks if the request is authorized to get admin access to devices
 // based on namespace label
-func AuthorizedForAdmin(ctx context.Context, deviceRequests []resource.DeviceRequest, namespaceName string, nsClient v1.NamespaceInterface, oldDeviceRequests []resource.DeviceRequest) field.ErrorList {
+func AuthorizedForAdmin(ctx context.Context, deviceRequests []resource.DeviceRequest, namespaceName string, nsClient v1.NamespaceInterface) field.ErrorList {
 	var allErrs field.ErrorList
 	adminRequested := false
-
-	if !utilfeature.DefaultFeatureGate.Enabled(features.DRAAdminAccess) {
-		// No need to validate unless feature gate is enabled
-		return allErrs
-	}
+	var adminAccessPath *field.Path
 
 	// no need to check old request since spec is immutable
 
@@ -45,6 +39,7 @@ func AuthorizedForAdmin(ctx context.Context, deviceRequests []resource.DeviceReq
 		value := deviceRequests[i].AdminAccess
 		if value != nil && *value {
 			adminRequested = true
+			adminAccessPath = field.NewPath("spec", "devices", "requests").Index(i).Child("adminAccess")
 			break
 		}
 	}
@@ -56,10 +51,10 @@ func AuthorizedForAdmin(ctx context.Context, deviceRequests []resource.DeviceReq
 	// Retrieve the namespace object from the store
 	ns, err := nsClient.Get(ctx, namespaceName, metav1.GetOptions{})
 	if err != nil {
-		return append(allErrs, field.Forbidden(field.NewPath(""), "admin access to devices is not allowed when namespace object is not retrievable"))
+		return append(allErrs, field.InternalError(adminAccessPath, fmt.Errorf("could not retrieve namespace to verify admin access: %w", err)))
 	}
 	if ns.Labels[resource.DRAAdminNamespaceLabelKey] != "true" {
-		return append(allErrs, field.Forbidden(field.NewPath(""), fmt.Sprintf("admin access to devices is not allowed in namespace without the `%s: true` label", resource.DRAAdminNamespaceLabelKey)))
+		return append(allErrs, field.Forbidden(adminAccessPath, fmt.Sprintf("admin access to devices requires the `%s: true` label on the containing namespace", resource.DRAAdminNamespaceLabelKey)))
 	}
 
 	return allErrs
@@ -67,28 +62,24 @@ func AuthorizedForAdmin(ctx context.Context, deviceRequests []resource.DeviceReq
 
 // AuthorizedForAdminStatus checks if the request status is authorized to get admin access to devices
 // based on namespace label
-func AuthorizedForAdminStatus(ctx context.Context, newStatus resource.ResourceClaimStatus, namespaceName string, nsClient v1.NamespaceInterface) field.ErrorList {
+func AuthorizedForAdminStatus(ctx context.Context, newAllocationResult, oldAllocationResult *[]resource.DeviceRequestAllocationResult, namespaceName string, nsClient v1.NamespaceInterface) field.ErrorList {
 	var allErrs field.ErrorList
-	adminRequested := false
+	var adminAccessPath *field.Path
 
-	if !utilfeature.DefaultFeatureGate.Enabled(features.DRAAdminAccess) {
-		// No need to validate unless feature gate is enabled
-		return allErrs
-	}
-
-	// no need to check old request since status.Allocation is immutable
-
-	if newStatus.Allocation == nil {
-		return allErrs
-	}
-	for i := range newStatus.Allocation.Devices.Results {
-		value := newStatus.Allocation.Devices.Results[i].AdminAccess
-		if value != nil && *value {
-			adminRequested = true
-			break
+	if oldAllocationResult != nil {
+		granted, _ := adminRequested(*oldAllocationResult)
+		if granted {
+			// No need to validate if old status has admin access granted, since status.Allocation is immutable
+			return allErrs
 		}
 	}
-	if !adminRequested {
+	if newAllocationResult == nil {
+		// No need to validate unless admin access is requested
+		return allErrs
+	}
+
+	requested, adminAccessPath := adminRequested(*newAllocationResult)
+	if !requested {
 		// No need to validate unless admin access is requested
 		return allErrs
 	}
@@ -96,11 +87,21 @@ func AuthorizedForAdminStatus(ctx context.Context, newStatus resource.ResourceCl
 	// Retrieve the namespace object from the store
 	ns, err := nsClient.Get(ctx, namespaceName, metav1.GetOptions{})
 	if err != nil {
-		return append(allErrs, field.Forbidden(field.NewPath(""), "admin access to devices is not allowed when namespace object is not retrievable"))
+		return append(allErrs, field.InternalError(adminAccessPath, fmt.Errorf("could not retrieve namespace to verify admin access: %w", err)))
 	}
 	if ns.Labels[resource.DRAAdminNamespaceLabelKey] != "true" {
-		return append(allErrs, field.Forbidden(field.NewPath(""), fmt.Sprintf("admin access to devices is not allowed in namespace without the `%s: true` label", resource.DRAAdminNamespaceLabelKey)))
+		return append(allErrs, field.Forbidden(adminAccessPath, fmt.Sprintf("admin access to devices requires the `%s: true` label on the containing namespace", resource.DRAAdminNamespaceLabelKey)))
 	}
 
 	return allErrs
+}
+
+func adminRequested(deviceRequestResults []resource.DeviceRequestAllocationResult) (bool, *field.Path) {
+	for i := range deviceRequestResults {
+		value := deviceRequestResults[i].AdminAccess
+		if value != nil && *value {
+			return true, field.NewPath("status", "allocation", "devices", "results").Index(i).Child("adminAccess")
+		}
+	}
+	return false, nil
 }

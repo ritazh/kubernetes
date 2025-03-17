@@ -32,6 +32,7 @@ import (
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/typed/core/v1"
 	"k8s.io/dynamic-resource-allocation/structured"
+	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/apis/resource/validation"
 	"k8s.io/kubernetes/pkg/features"
@@ -47,10 +48,10 @@ type resourceclaimStrategy struct {
 }
 
 // NewStrategy is the default logic that applies when creating and updating ResourceClaim objects.
-func NewStrategy(ro runtime.ObjectTyper, ng names.NameGenerator, nsClient v1.NamespaceInterface) *resourceclaimStrategy {
+func NewStrategy(nsClient v1.NamespaceInterface) *resourceclaimStrategy {
 	return &resourceclaimStrategy{
-		ro,
-		ng,
+		legacyscheme.Scheme,
+		names.SimpleNameGenerator,
 		nsClient,
 	}
 }
@@ -86,7 +87,7 @@ func (*resourceclaimStrategy) PrepareForCreate(ctx context.Context, obj runtime.
 func (s *resourceclaimStrategy) Validate(ctx context.Context, obj runtime.Object) field.ErrorList {
 	claim := obj.(*resource.ResourceClaim)
 
-	allErrs := resourceutils.AuthorizedForAdmin(ctx, claim.Spec.Devices.Requests, claim.Namespace, s.nsClient, nil)
+	allErrs := resourceutils.AuthorizedForAdmin(ctx, claim.Spec.Devices.Requests, claim.Namespace, s.nsClient)
 	return append(allErrs, validation.ValidateResourceClaim(claim)...)
 }
 
@@ -162,7 +163,14 @@ func (*resourceclaimStatusStrategy) PrepareForUpdate(ctx context.Context, obj, o
 func (r *resourceclaimStatusStrategy) ValidateUpdate(ctx context.Context, obj, old runtime.Object) field.ErrorList {
 	newClaim := obj.(*resource.ResourceClaim)
 	oldClaim := old.(*resource.ResourceClaim)
-	allErrs := resourceutils.AuthorizedForAdminStatus(ctx, newClaim.Status, newClaim.Namespace, r.nsClient)
+	var newAllocationResult, oldAllocationResult *[]resource.DeviceRequestAllocationResult
+	if newClaim.Status.Allocation != nil {
+		newAllocationResult = &newClaim.Status.Allocation.Devices.Results
+	}
+	if oldClaim.Status.Allocation != nil {
+		oldAllocationResult = &oldClaim.Status.Allocation.Devices.Results
+	}
+	allErrs := resourceutils.AuthorizedForAdminStatus(ctx, newAllocationResult, oldAllocationResult, newClaim.Namespace, r.nsClient)
 	return append(allErrs, validation.ValidateResourceClaimStatusUpdate(newClaim, oldClaim)...)
 }
 

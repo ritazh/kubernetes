@@ -17,12 +17,12 @@ limitations under the License.
 package storage
 
 import (
+	"fmt"
+
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apiserver/pkg/registry/generic"
 	genericregistry "k8s.io/apiserver/pkg/registry/generic/registry"
-	"k8s.io/apiserver/pkg/storage/names"
 	"k8s.io/client-go/kubernetes/typed/core/v1"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/printers"
 	printersinternal "k8s.io/kubernetes/pkg/printers/internalversion"
@@ -37,7 +37,10 @@ type REST struct {
 
 // NewREST returns a RESTStorage object that will work against ResourceClass.
 func NewREST(optsGetter generic.RESTOptionsGetter, nsClient v1.NamespaceInterface) (*REST, error) {
-	strategy := resourceclaimtemplate.NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, nsClient)
+	if nsClient == nil {
+		return nil, fmt.Errorf("namespace client is required")
+	}
+	strategy := resourceclaimtemplate.NewStrategy(nsClient)
 	store := &genericregistry.Store{
 		NewFunc:                   func() runtime.Object { return &resource.ResourceClaimTemplate{} },
 		NewListFunc:               func() runtime.Object { return &resource.ResourceClaimTemplateList{} },

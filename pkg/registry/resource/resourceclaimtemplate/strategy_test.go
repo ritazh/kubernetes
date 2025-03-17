@@ -24,12 +24,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	genericapirequest "k8s.io/apiserver/pkg/endpoints/request"
-	"k8s.io/apiserver/pkg/storage/names"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	"k8s.io/client-go/kubernetes/fake"
 	testclient "k8s.io/client-go/testing"
 	featuregatetesting "k8s.io/component-base/featuregate/testing"
-	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	"k8s.io/kubernetes/pkg/apis/resource"
 	"k8s.io/kubernetes/pkg/features"
 	"k8s.io/utils/ptr"
@@ -135,7 +133,7 @@ var ns2 = &corev1.Namespace{
 		Labels: map[string]string{resource.DRAAdminNamespaceLabelKey: "true"},
 	},
 }
-var adminAccessError = "Forbidden: admin access to devices is not allowed in namespace without the `resource.k8s.io/admin-access: true` label"
+var adminAccessError = "Forbidden: admin access to devices requires the `resource.k8s.io/admin-access: true` label on the containing namespace"
 var fieldImmutableError = "field is immutable"
 var metadataError = "a lowercase RFC 1123 subdomain must consist of lower case alphanumeric characters"
 var deviceRequestError = "exactly one of `deviceClassName` or `firstAvailable` must be specified"
@@ -143,7 +141,7 @@ var deviceRequestError = "exactly one of `deviceClassName` or `firstAvailable` m
 func TestClaimTemplateStrategy(t *testing.T) {
 	fakeClient := fake.NewSimpleClientset()
 	mockNSClient := fakeClient.CoreV1().Namespaces()
-	strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+	strategy := NewStrategy(mockNSClient)
 
 	if !strategy.NamespaceScoped() {
 		t.Errorf("ResourceClaimTemplate must be namespace scoped")
@@ -270,7 +268,7 @@ func TestClaimTemplateStrategyCreate(t *testing.T) {
 			mockNSClient := fakeClient.CoreV1().Namespaces()
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAAdminAccess, tc.adminAccess)
 			featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DRAPrioritizedList, tc.prioritizedList)
-			strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+			strategy := NewStrategy(mockNSClient)
 
 			obj := tc.obj.DeepCopy()
 			strategy.PrepareForCreate(ctx, obj)
@@ -297,7 +295,7 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 		fakeClient := fake.NewSimpleClientset(ns1, ns2)
 		mockNSClient := fakeClient.CoreV1().Namespaces()
 
-		strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+		strategy := NewStrategy(mockNSClient)
 		resourceClaimTemplate := obj.DeepCopy()
 		newClaimTemplate := resourceClaimTemplate.DeepCopy()
 		newClaimTemplate.ResourceVersion = "4"
@@ -316,7 +314,7 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 		ctx := genericapirequest.NewDefaultContext()
 		fakeClient := fake.NewSimpleClientset(ns1, ns2)
 		mockNSClient := fakeClient.CoreV1().Namespaces()
-		strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+		strategy := NewStrategy(mockNSClient)
 		resourceClaimTemplate := obj.DeepCopy()
 		newClaimTemplate := resourceClaimTemplate.DeepCopy()
 		newClaimTemplate.Name = "valid-class-2"
@@ -337,7 +335,7 @@ func TestClaimTemplateStrategyUpdate(t *testing.T) {
 		ctx := genericapirequest.NewDefaultContext()
 		fakeClient := fake.NewSimpleClientset(ns1, ns2)
 		mockNSClient := fakeClient.CoreV1().Namespaces()
-		strategy := NewStrategy(legacyscheme.Scheme, names.SimpleNameGenerator, mockNSClient)
+		strategy := NewStrategy(mockNSClient)
 		resourceClaimTemplate := obj.DeepCopy()
 		newClaimTemplate := resourceClaimTemplate.DeepCopy()
 		newClaimTemplate.ResourceVersion = "4"
