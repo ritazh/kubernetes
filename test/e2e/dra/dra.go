@@ -29,7 +29,6 @@ import (
 	"github.com/onsi/gomega"
 	"github.com/onsi/gomega/gstruct"
 	"github.com/onsi/gomega/types"
-	"github.com/prometheus/common/model"
 
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
@@ -41,6 +40,7 @@ import (
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/validation"
+	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	applyv1 "k8s.io/client-go/applyconfigurations/core/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/component-base/metrics/testutil"
@@ -2282,7 +2282,7 @@ var _ = framework.SIGDescribe("node")(framework.WithLabel("DRA"), framework.With
 			mustDelete(f.ClientSet, "admin", createdClusterSlice)
 		})
 
-		f.It("controller manager metrics track ResourceClaim operations with correct labels", func(ctx context.Context) {
+		f.It("controller manager metrics track ResourceClaim operations with correct labels", f.WithFeatureGate(features.DRAAdminAccess), func(ctx context.Context) {
 			b := drautils.NewBuilderNow(ctx, f, driver)
 
 			ginkgo.By("Getting initial controller manager metrics")
@@ -2382,7 +2382,7 @@ var _ = framework.SIGDescribe("node")(framework.WithLabel("DRA"), framework.With
 				}
 
 				return fmt.Errorf("ResourceClaim not yet generated from template")
-			}).WithTimeout(30 * time.Second).WithPolling(1 * time.Second).Should(gomega.Succeed())
+			}).WithTimeout(podStartTimeout).WithPolling(1 * time.Second).Should(gomega.Succeed())
 
 			ginkgo.By("Verifying metrics reflect the controller-created claim without admin access")
 			gomega.Eventually(ctx, func(ctx context.Context) error {
@@ -2444,14 +2444,24 @@ var _ = framework.SIGDescribe("node")(framework.WithLabel("DRA"), framework.With
 								Exactly: &resourceapi.ExactDeviceRequest{
 									DeviceClassName: b.ClassName(),
 									AdminAccess:     ptr.To(true),
+									AllocationMode:  resourceapi.DeviceAllocationModeAll,
 								},
 							}},
 						},
 					},
 				},
 			}
+
+			ginkgo.By(fmt.Sprintf("requested adminTemplate: %+v", adminTemplate))
+
+			// Debug: Check feature gate status before template creation
+			featureGateEnabled := utilfeature.DefaultFeatureGate.Enabled(features.DRAAdminAccess)
+			ginkgo.By(fmt.Sprintf("DEBUG: DRAAdminAccess feature gate enabled = %v", featureGateEnabled))
+
 			createdAdminTemplate, err := f.ClientSet.ResourceV1beta2().ResourceClaimTemplates(f.Namespace.Name).Create(ctx, adminTemplate, metav1.CreateOptions{})
 			framework.ExpectNoError(err, "create ResourceClaimTemplate with admin access")
+
+			ginkgo.By(fmt.Sprintf("createdAdminTemplate: %+v", createdAdminTemplate))
 
 			adminPod := &v1.Pod{
 				ObjectMeta: metav1.ObjectMeta{
@@ -2605,7 +2615,7 @@ func getMetricValue(metrics e2emetrics.ControllerManagerMetrics, metricName stri
 	for _, sample := range samples {
 		match := true
 		for labelKey, labelValue := range labels {
-			if string(sample.Metric[model.LabelName(labelKey)]) != labelValue {
+			if string(sample.Metric[testutil.LabelName(labelKey)]) != labelValue {
 				match = false
 				break
 			}
